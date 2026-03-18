@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..operator import ElectronicIntegrals, Operator as SymbolicOperator, to_electronic_integrals
+from ..operator.integrals import ElectronicIntegrals
+from ..operator.operator import Operator as SymbolicOperator
+from ..operator.transforms import to_electronic_integrals
 
 
 def coerce_symbolic_operator(hamiltonian) -> SymbolicOperator:
@@ -27,11 +29,16 @@ def coerce_electronic_integrals(hamiltonian) -> ElectronicIntegrals:
     )
 
 
-def normalize_electron_count(*, n_electrons=None, n_particles=None) -> tuple[tuple[int, int], int]:
+def normalize_electron_count(*, space=None, n_electrons=None, n_particles=None) -> tuple[tuple[int, int], int]:
     if n_electrons is not None and n_particles is not None:
         raise ValueError("Provide only one of `n_electrons` or `n_particles`.")
 
     spec = n_particles if n_particles is not None else n_electrons
+    if spec is None and space is not None:
+        if getattr(space, "n_electrons_per_spin", None) is not None:
+            spec = tuple(space.n_electrons_per_spin)
+        elif getattr(space, "n_electrons", None) is not None:
+            spec = int(space.n_electrons)
     if spec is None:
         raise ValueError("An electron count must be supplied via `n_electrons` or `n_particles`.")
 
@@ -56,3 +63,4 @@ def normalize_electron_count(*, n_electrons=None, n_particles=None) -> tuple[tup
         "Electron counts must be an int, a `(n_alpha, n_beta)` tuple, "
         "or a single-item list containing such a tuple."
     )
+

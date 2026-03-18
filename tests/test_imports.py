@@ -13,14 +13,23 @@ import sys
 sys.modules['hubbard'] = None
 import mbkit
 import mbkit.operator
+import mbkit.operator.interop
 import mbkit.operator.integrals
-import mbkit.operator.models
-import mbkit.operator.models.hopping
-import mbkit.operator.models.observables
-import mbkit.operator.models.soc
+import mbkit.operator.quadratic
 import mbkit.operator.transforms.qc
 import mbkit.operator.transforms
 import mbkit.solver
+import mbkit.solver.base
+import mbkit.solver.capabilities
+import mbkit.solver.compile
+import mbkit.solver.compile.local_terms
+import mbkit.solver.registry
+import mbkit.utils
+import mbkit.utils.construction
+import mbkit.utils.dependencies
+import mbkit.utils.selection
+import mbkit.utils.solver
+from mbkit import chain, cubic, general, honeycomb, kagome, ladder, rectangular, square, triangular
 print('ok')
 """
     env = os.environ.copy()

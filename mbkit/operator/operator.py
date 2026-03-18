@@ -1,3 +1,12 @@
+"""Backend-neutral symbolic fermionic algebra for `mbkit`.
+
+This module deliberately stays at the second-quantized algebra layer. It knows
+about fermionic anticommutation rules and canonical normal ordering, but it does
+not silently assume a specific physical Hamiltonian class such as "quadratic",
+"two-body electronic", or "density-density". Those more structured views live in
+separate containers like `ElectronicIntegrals` and `QuadraticHamiltonian`.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,12 +19,16 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Ladder:
+    """A single fermionic ladder operator acting on one spin-orbital mode."""
+
     mode: int
     action: Literal["create", "destroy"]
 
 
 @dataclass(frozen=True)
 class Term:
+    """An ordered product of ladder operators."""
+
     factors: tuple[Ladder, ...]
 
 
@@ -42,6 +55,12 @@ def _swap_sign(left: Ladder, right: Ladder) -> complex:
 
 @lru_cache(maxsize=None)
 def _normal_order_word(word: tuple[Ladder, ...]) -> tuple[tuple[tuple[Ladder, ...], complex], ...]:
+    """Return the fermionic normal-ordered expansion of one operator word.
+
+    This is the heart of the symbolic layer: it applies CAR exactly, including
+    contractions like `a a^dagger = 1 - a^dagger a`, and returns all resulting
+    terms plus their signs.
+    """
     for idx in range(len(word) - 1):
         left = word[idx]
         right = word[idx + 1]
@@ -64,7 +83,13 @@ def _normal_order_word(word: tuple[Ladder, ...]) -> tuple[tuple[tuple[Ladder, ..
 
 
 class Operator:
-    """Backend-neutral symbolic fermionic operator."""
+    """Backend-neutral symbolic fermionic operator.
+
+    Design choice:
+    the constructor eagerly normal-orders and merges equivalent terms. That gives
+    `mbkit` a canonical symbolic representation without forcing users to call a
+    separate normalization pass after every algebraic operation.
+    """
 
     def __init__(
         self,
@@ -112,14 +137,31 @@ class Operator:
     def iter_terms(self) -> Iterator[tuple[Term, complex]]:
         return iter(self._terms.items())
 
+    def _sorted_terms(self) -> tuple[tuple[Term, complex], ...]:
+        return tuple(
+            sorted(
+                self._terms.items(),
+                key=lambda item: (
+                    len(item[0].factors),
+                    tuple(_sort_key(factor) for factor in item[0].factors),
+                ),
+            )
+        )
+
     def simplify(self, *, atol: float = 1e-12) -> "Operator":
+        """Drop numerically tiny coefficients and return a cleaned copy."""
         return Operator(
             self.space,
             constant=0.0 if abs(self.constant) <= atol else self.constant,
             terms={term: coeff for term, coeff in self._terms.items() if abs(coeff) > atol},
         )
 
+    def compress(self, *, atol: float = 1e-12) -> "Operator":
+        """Alias for :meth:`simplify` for users coming from other packages."""
+        return self.simplify(atol=atol)
+
     def adjoint(self) -> "Operator":
+        """Return the Hermitian adjoint of the operator."""
         terms = {}
         for term, coeff in self.iter_terms():
             reversed_factors = []
@@ -130,15 +172,51 @@ class Operator:
         return Operator(self.space, constant=np.conjugate(self.constant), terms=terms)
 
     def is_hermitian(self, *, atol: float = 1e-12) -> bool:
+        """Check Hermiticity in the canonical symbolic representation."""
         diff = (self - self.adjoint()).simplify(atol=atol)
         return abs(diff.constant) <= atol and not diff.terms
 
+    def normal_ordered(self) -> "Operator":
+        """Return a canonically normal-ordered copy.
+
+        Since `Operator` is already normalized on construction, this mainly
+        serves as an explicit readability hook in calling code.
+        """
+        return Operator(self.space, constant=self.constant, terms=self._terms)
+
+    def serialize(self) -> dict[str, object]:
+        """Return a stable, JSON-friendly description for debugging and tests."""
+        def _serialize_coeff(value: complex) -> tuple[float, float]:
+            scalar = complex(value)
+            return (float(scalar.real), float(scalar.imag))
+
+        return {
+            "space": {
+                "num_sites": self.space.num_sites,
+                "orbitals": tuple(self.space.orbitals),
+                "spins": tuple(self.space.spins),
+            },
+            "constant": _serialize_coeff(self.constant),
+            "terms": tuple(
+                {
+                    "coefficient": _serialize_coeff(coeff),
+                    "factors": tuple((factor.mode, factor.action) for factor in term.factors),
+                }
+                for term, coeff in self._sorted_terms()
+            ),
+        }
+
+    def term_count(self) -> int:
+        return len(self._terms)
+
     def body_rank(self) -> int:
+        """Return the highest operator body-rank present in the symbolic sum."""
         if not self._terms:
             return 0
         return max(len(term.factors) // 2 if len(term.factors) % 2 == 0 else len(term.factors) for term in self._terms)
 
     def particle_number_changes(self) -> frozenset[int]:
+        """Return all particle-number changes represented in the operator."""
         changes = set()
         if abs(self.constant) > 1e-15:
             changes.add(0)
@@ -150,6 +228,7 @@ class Operator:
         return frozenset(changes)
 
     def spin_changes(self) -> frozenset[int]:
+        """Return all spin-projection changes represented in the operator."""
         changes = set()
         if abs(self.constant) > 1e-15:
             changes.add(0)
@@ -161,6 +240,35 @@ class Operator:
                 delta += spin_sign if ladder.action == "create" else -spin_sign
             changes.add(delta)
         return frozenset(changes)
+
+    def equiv(self, other, *, atol: float = 1e-12) -> bool:
+        """Check symbolic equivalence up to numerical tolerance."""
+        if not isinstance(other, Operator):
+            return False
+        same_space = (
+            self.space is other.space
+            or (
+                self.space.num_sites == other.space.num_sites
+                and tuple(self.space.orbitals) == tuple(other.space.orbitals)
+                and tuple(self.space.spins) == tuple(other.space.spins)
+            )
+        )
+        if not same_space:
+            return False
+        diff = (self - other).simplify(atol=atol)
+        return abs(diff.constant) <= atol and not diff.terms
+
+    def commutator(self, other) -> "Operator":
+        """Return the commutator `[self, other]`."""
+        if not isinstance(other, Operator):
+            return NotImplemented
+        return (self @ other) - (other @ self)
+
+    def anticommutator(self, other) -> "Operator":
+        """Return the anticommutator `{self, other}`."""
+        if not isinstance(other, Operator):
+            return NotImplemented
+        return (self @ other) + (other @ self)
 
     def __add__(self, other) -> "Operator":
         if isinstance(other, Number):
@@ -245,7 +353,7 @@ class Operator:
         pieces = []
         if abs(self.constant) > 1e-15:
             pieces.append(f"{self.constant:+}")
-        for term, coeff in sorted(self._terms.items(), key=lambda item: (len(item[0].factors), tuple(_sort_key(factor) for factor in item[0].factors))):
+        for term, coeff in self._sorted_terms():
             labels = []
             for ladder in term.factors:
                 mode = self.space.unpack_mode(ladder.mode)

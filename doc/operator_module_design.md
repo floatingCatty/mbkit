@@ -7,6 +7,14 @@ active `mbkit` operator stack. Direct QuSpin and QC-tensor lowerings are in plac
 `mbkit.operator.legacy` namespace has been retired, and the supported solver targets are the direct
 ED, DMRG, and PySCF adapters.
 
+The implementation has also moved to a strictly `space`-first public API: the temporary
+`mbkit.operator.models` wrapper package has been removed, model construction now lives directly on
+`ElectronicSpace`, and shared internal helper code has been consolidated under `mbkit.utils`.
+
+As of the same date, built-in lattices also support shell-aware bond generation through
+`max_shell`, and the public construction flow supports shell-first coupling selection through
+`shells=...`.
+
 ## Summary
 
 This document defines the target architecture and staged development plan for the `mbkit.operator`

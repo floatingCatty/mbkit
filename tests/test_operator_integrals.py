@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 
-from mbkit import ElectronicIntegrals, ElectronicSpace, LineLattice, models, to_electronic_integrals
+from mbkit import ElectronicIntegrals, ElectronicSpace, LineLattice, to_electronic_integrals
 from mbkit.operator import UnsupportedTransformError, to_qc_tensors
 
 
 def test_electronic_integrals_round_trip_matches_symbolic_operator():
     space = ElectronicSpace(LineLattice(2, boundary="open"), orbitals=["a"])
-    operator = models.hubbard(space, t=1.0, U=4.0) + 0.5
+    operator = space.hubbard(t=1.0, U=4.0) + 0.5
 
     integrals = to_electronic_integrals(operator)
     rebuilt = integrals.to_operator()

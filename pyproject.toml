@@ -28,6 +28,10 @@ classifiers = [
 core = ["numpy", "scipy", "quspin"]
 ed = ["numpy", "scipy", "quspin"]
 dmrg = ["pyblock2"]
+quimb = ["quimb"]
+tenpy = ["tenpy"]
+tensor = ["quimb", "tenpy"]
+interop = ["openfermion", "qiskit-nature"]
 pyscf = ["pyscf"]
 dev = ["pytest>=7"]
 
