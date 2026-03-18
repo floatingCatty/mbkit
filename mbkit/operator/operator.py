@@ -1,361 +1,255 @@
 from __future__ import annotations
-from typing import Tuple, Union
+
+from dataclasses import dataclass
+from functools import lru_cache
 from numbers import Number
-from functools import partial
+from typing import Iterator, Literal, Mapping
+
 import numpy as np
-from quspin.operators import hamiltonian
-from quspin.operators._make_hamiltonian import _consolidate_static
-from quspin.basis import spinful_fermion_basis_general
+
+
+@dataclass(frozen=True)
+class Ladder:
+    mode: int
+    action: Literal["create", "destroy"]
+
+
+@dataclass(frozen=True)
+class Term:
+    factors: tuple[Ladder, ...]
+
+
+def _sort_key(ladder: Ladder) -> tuple[int, int]:
+    action_key = 0 if ladder.action == "create" else 1
+    return (action_key, -ladder.mode)
+
+
+def _is_out_of_order(left: Ladder, right: Ladder) -> bool:
+    if left.action == right.action:
+        if left.mode == right.mode:
+            return False
+        return left.mode < right.mode
+    return left.action == "destroy" and right.action == "create"
+
+
+def _swap_sign(left: Ladder, right: Ladder) -> complex:
+    if left.action == "destroy" and right.action == "create":
+        return -1.0
+    if left.action == right.action:
+        return -1.0
+    return 1.0
+
+
+@lru_cache(maxsize=None)
+def _normal_order_word(word: tuple[Ladder, ...]) -> tuple[tuple[tuple[Ladder, ...], complex], ...]:
+    for idx in range(len(word) - 1):
+        left = word[idx]
+        right = word[idx + 1]
+
+        if left.mode == right.mode and left.action == right.action:
+            return tuple()
+
+        if _is_out_of_order(left, right):
+            swapped = word[:idx] + (right, left) + word[idx + 2 :]
+            pieces = {tuple(term): coeff * _swap_sign(left, right) for term, coeff in _normal_order_word(swapped)}
+
+            if left.action == "destroy" and right.action == "create" and left.mode == right.mode:
+                contracted = word[:idx] + word[idx + 2 :]
+                for term, coeff in _normal_order_word(contracted):
+                    pieces[tuple(term)] = pieces.get(tuple(term), 0.0) + coeff
+
+            return tuple((term, coeff) for term, coeff in pieces.items() if abs(coeff) > 1e-15)
+
+    return ((word, 1.0),)
 
 
 class Operator:
-    """Quantum operator"""
+    """Backend-neutral symbolic fermionic operator."""
 
-    def __init__(self, op_list: list):
-        """
-        :param op_list:
-            The operator represented as a list in the
-            `QuSpin format <https://quspin.github.io/QuSpin/generated/quspin.operators.hamiltonian.html#quspin.operators.hamiltonian.__init__>`_
+    def __init__(
+        self,
+        space,
+        *,
+        constant: complex = 0.0,
+        terms: Mapping[Term, complex] | None = None,
+    ) -> None:
+        self._space = space
+        self._constant = complex(constant)
+        reduced: dict[Term, complex] = {}
 
-            ``[[opstr1, [strength1, index11, index12, ...]], [opstr2, [strength2, index21, index22, ...]], ...]``
+        if terms is not None:
+            for term, coeff in terms.items():
+                for ordered_factors, ordered_coeff in _normal_order_word(term.factors):
+                    total_coeff = complex(coeff) * complex(ordered_coeff)
+                    if not ordered_factors:
+                        self._constant += total_coeff
+                        continue
+                    ordered_term = Term(tuple(ordered_factors))
+                    reduced[ordered_term] = reduced.get(ordered_term, 0.0) + total_coeff
 
-                opstr:
-                    a `string <https://quspin.github.io/QuSpin/basis.html>`_ representing the operator type.
-                    The convention is chosen the same as ``pauli=0`` in
-                    `QuSpin <https://quspin.github.io/QuSpin/generated/quspin.basis.spin_basis_general.html#quspin.basis.spin_basis_general.__init__>`_
-
-                strength:
-                    interaction strength
-
-                index:
-                    the site index that operators act on
-        """
-        self._op_list = op_list
-        self._quspin_op = dict()
-        self._quspin_basis = dict()
-        self._connectivity = None
-        self._is_basis_made = False
+        self._terms = {term: coeff for term, coeff in reduced.items() if abs(coeff) > 1e-15}
 
     @property
-    def op_list(self) -> list:
-        """Operator represented as a list in the QuSpin format"""
-        return self._op_list
+    def space(self):
+        return self._space
 
     @property
-    def expression(self) -> str:
-        """The operator as a human-readable expression"""
-        SUB = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
-        OP = str.maketrans({"x": "Sˣ", "y": "Sʸ", "z": "Sᶻ", "+": "S⁺", "-": "S⁻"})
-        expression = []
-        for opstr, interaction in self.op_list:
-            for J, *index in interaction:
-                expression.append(f"{J:+}")
-                for op, i in zip(opstr, index):
-                    expression.append(f"{op.translate(OP)}{str(i).translate(SUB)}")
-        return " ".join(expression)
-
-    def __repr__(self) -> str:
-        return self.expression
-
-    def make_basis(self, nsites, Nparticle):
-
-        key = str(nsites) + "-" + str(Nparticle)
-        if self._quspin_basis.get(key) is not None:
-            self._basis = self._quspin_basis[key]
-        else:
-            self._basis = spinful_fermion_basis_general(
-                nsites,
-                Nparticle,
-                simple_symm=False,
-                make_basis=True
-            )
-            self._quspin_basis[key] = self._basis
+    def constant(self) -> complex:
+        return self._constant
 
     @property
-    def basis(self):
-        return self._basis
-    
-    def get_Hqc(self, nsites, symm=False):
-        # Hamiltonian format convention: https://block2.readthedocs.io/en/latest/theory/spatial.html#hamiltonian
-        oplist = _consolidate_static(self.op_list)
-        h1e = np.zeros((nsites*2, nsites*2)) + 0j
-        g2e = np.zeros((nsites*2, nsites*2, nsites*2, nsites*2)) + 0j
-        # key notes for the transformation: c_io* c_jo'* c_ko' c_lo
-        for op in oplist:
-            str, idx, t = op # str could be "+-", "-+", "nn", "+-+-", "++--", "n"
-            if str == "nn":
-                idx = [idx[0],idx[0],idx[1],idx[1]]
-            elif str == "n":
-                idx = [idx[0], idx[0]]
-            elif str == "+n-":
-                idx = [idx[0], idx[1], idx[1], idx[2]]
-                str = "++--"
-            elif str == "n+-":
-                idx = [idx[0], idx[1], idx[0], idx[2]]
-                str = "++--"
-                t = -t
-            idx = tuple(idx)
-
-            if str == "+-" or str == "n":
-                h1e[idx] += t
-            elif str == "-+":
-                h1e[idx] -= t
-            elif str == "nn": # i,j,k,l -> i,k,l,j -> g2e[i,j,k,l]
-                i, j, k, l = idx
-                if j == l:
-                    g2e[i,j,k,l] -= t
-                else:
-                    g2e[i,j,k,l] += t
-                if j == k:
-                    h1e[i,l] += t
-            elif str == "+-+-": # possible spins ooo'o', oo'oo', oo'o'o
-                i,j,k,l = idx
-                spin = list(map(lambda x: x // nsites, idx))
-                if spin == [0,0,1,1] or spin == [1,1,0,0]: # i,j,k,l -> i,k,l,j -> g2e[i,j,k,l]
-                    if j == l:
-                        g2e[i,j,k,l] -= t
-                    else:
-                        g2e[i,j,k,l] += t
-                    if j == k:
-                        h1e[i,l] += t
-                elif spin == [0,1,1,0] or spin == [1,0,0,1]: # i,j,k,l -> i,k,j,l -> -g2e[i,l,k,j]
-                    g2e[i,l,k,j] -= t
-                    if j == k:
-                        h1e[i,l] += t
-                else:
-                    raise NotImplementedError("Spin format {} of exchange like operator is not allowed.".format(spin))
-                
-            elif str == "++--": # possible spins ooo'o', oo'oo', oo'o'o 
-                i,j,k,l = idx
-                """
-                    1. adjust spin order to oo'o'o or o'ooo' with op order ++--, get index a,b,c,d
-                    2. take new index order as a,d,b,c
-                """
-                spin = list(map(lambda x: x // nsites, idx))
-                if spin == [0,1,0,1] or spin == [1,0,1,0]: # i,j,k,l -> i,j,l,k -> -g2e[i,k,j,l]
-                    g2e[i,k,j,l] -= t
-                elif spin == [0,1,1,0] or spin == [1,0,0,1]: # i,j,k,l -> g2e[i,l,j,k]
-                    g2e[i,l,j,k] += t
-                elif spin == [0,0,0,0] or spin == [1,1,1,1]: # TODO: new, need check
-                    g2e[i,l,j,k] += t
-                else:
-                    raise NotImplementedError("Spin format {} of pair-hopping like operator is not allowed.".format(spin))
-            else:
-                raise NotImplementedError("Currently, the get_Hqc method only support operator consists [+-, -+, nn, n, +n-, n+-, +-+-, ++--]!")
-        
-        if np.abs(h1e.imag).sum() < 1e-7:
-            h1e = h1e.real
-        if np.abs(g2e.imag).sum() < 1e-7:
-            g2e = g2e.real
-
-        if symm:
-            ofd = 0.5 * (g2e[:nsites,:nsites,nsites:,nsites:] + g2e[nsites:,nsites:,:nsites,:nsites])
-            g2e[:nsites,:nsites,nsites:,nsites:] = ofd.copy()
-            g2e[nsites:,nsites:,:nsites,:nsites] = ofd.copy()
-        
-        return h1e, 2*g2e
+    def terms(self) -> Mapping[Term, complex]:
+        return self._terms
 
     @classmethod
-    def from_Hqc(cls, h1e, g2e):
-        oplist = [["+-",[]], ["++--",[]]]
-        nsites = h1e.shape[0]
-        for i in range(nsites):
-            for j in range(nsites):
-                if np.abs(h1e[i,j]) > 1e-8:
-                    oplist[0][1].append([h1e[i,j].item(),i,j])
-        
-        for i in range(nsites):
-            for j in range(nsites):
-                for k in range(nsites):
-                    for l in range(nsites):
-                        if np.abs(g2e[i,j,k,l]) > 1e-8:
-                            oplist[1][1].append([0.5*g2e[i,j,k,l].item(),i,k,l,j])
-        
-        return cls(op_list=oplist)
+    def zero(cls, space) -> "Operator":
+        return cls(space)
 
-    def get_quspin_op(self, nsites, Nparticle, iscomplex=False) -> hamiltonian:
-        """
-        Obtain the corresponding
-        `QuSpin operator <https://quspin.github.io/QuSpin/generated/quspin.operators.hamiltonian.html#quspin.operators.hamiltonian.__init__>`_
+    @classmethod
+    def identity(cls, space, coeff: complex = 1.0) -> "Operator":
+        return cls(space, constant=coeff)
 
-        :param symm:
-            The symmetry used for generate the operator basis, by default the basis
-            without symmetry
-        """
-        self.make_basis(nsites, Nparticle)
-        
-        key = str(nsites) + "-" + str(Nparticle)
+    def iter_terms(self) -> Iterator[tuple[Term, complex]]:
+        return iter(self._terms.items())
 
-        if iscomplex:
-            dtype = np.complex128
-        else:
-            dtype = np.float64
+    def simplify(self, *, atol: float = 1e-12) -> "Operator":
+        return Operator(
+            self.space,
+            constant=0.0 if abs(self.constant) <= atol else self.constant,
+            terms={term: coeff for term, coeff in self._terms.items() if abs(coeff) > atol},
+        )
 
-        if key not in self._quspin_op:
-            self._quspin_op[key] = hamiltonian(
-                static_list=self.op_list,
-                dynamic_list=[],
-                basis=self.basis,
-                check_symm=False,
-                check_herm=False,
-                check_pcon=False,
-                dtype=dtype,
-            )
+    def adjoint(self) -> "Operator":
+        terms = {}
+        for term, coeff in self.iter_terms():
+            reversed_factors = []
+            for ladder in reversed(term.factors):
+                action = "destroy" if ladder.action == "create" else "create"
+                reversed_factors.append(Ladder(ladder.mode, action))
+            terms[Term(tuple(reversed_factors))] = np.conjugate(coeff)
+        return Operator(self.space, constant=np.conjugate(self.constant), terms=terms)
 
-        return self._quspin_op[key]
+    def is_hermitian(self, *, atol: float = 1e-12) -> bool:
+        diff = (self - self.adjoint()).simplify(atol=atol)
+        return abs(diff.constant) <= atol and not diff.terms
 
-    def todense(self, nsites, Nparticle, iscomplex=False) -> np.ndarray:
-        """
-        Obtain the dense matrix representing the operator
+    def body_rank(self) -> int:
+        if not self._terms:
+            return 0
+        return max(len(term.factors) // 2 if len(term.factors) % 2 == 0 else len(term.factors) for term in self._terms)
 
-        :param symm:
-            The symmetry used for generate the operator basis, by default the basis
-            without symmetry
-        """
-        quspin_op = self.get_quspin_op(nsites, Nparticle, iscomplex=iscomplex)
-        return quspin_op.as_dense_format()
+    def particle_number_changes(self) -> frozenset[int]:
+        changes = set()
+        if abs(self.constant) > 1e-15:
+            changes.add(0)
+        for term in self._terms:
+            delta = 0
+            for ladder in term.factors:
+                delta += 1 if ladder.action == "create" else -1
+            changes.add(delta)
+        return frozenset(changes)
 
-    def tosparse(self, nsites, Nparticle, iscomplex=False) -> np.ndarray:
-        """
-        Obtain the sparse matrix representing the operator
+    def spin_changes(self) -> frozenset[int]:
+        changes = set()
+        if abs(self.constant) > 1e-15:
+            changes.add(0)
+        for term in self._terms:
+            delta = 0
+            for ladder in term.factors:
+                mode = self.space.unpack_mode(ladder.mode)
+                spin_sign = 1 if mode.spin == "up" else -1
+                delta += spin_sign if ladder.action == "create" else -spin_sign
+            changes.add(delta)
+        return frozenset(changes)
 
-        :param symm:
-            The symmetry used for generate the operator basis, by default the basis
-            without symmetry
-        """
-        quspin_op = self.get_quspin_op(nsites, Nparticle, iscomplex=iscomplex)
-        return quspin_op.as_sparse_format()
-
-    def __array__(self) -> np.ndarray:
-        return self.todense()
-
-    def diagonalize(
-        self,
-        nsites, 
-        Nparticle,
-        k: Union[int, str] = 1,
-        iscomplex=False,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Diagonalize the hamiltonian :math:`H = V D V^†`
-
-        :param symm:
-            Symmetry for generating basis.
-        :param k:
-            A number specifying how many lowest states to obtain.
-        :return:
-            w:
-                Array of k eigenvalues.
-
-            v:
-                An array of k eigenvectors. ``v[:, i]`` is the eigenvector corresponding to
-                the eigenvalue ``w[i]``.
-        """
-        
-        quspin_op = self.get_quspin_op(nsites, Nparticle, iscomplex=iscomplex)
-        # if iscomplex:
-        #     dtype = np.complex128
-        # else:
-        #     dtype = np.float64
-
-        # num = []
-        # for updown in Nparticle:
-        #     num.append(np.prod(comb([nsites, nsites], updown)))
-        # num = np.sum(num)
-        # print(num)
-        # v0 = np.zeros(int(num), dtype=dtype)
-        # v0[0] = 1
-        return quspin_op.eigsh(k=k, which="SA")
-
-    def __add__(self, other: Union[Number, Operator]) -> Operator:
-        """Add two operators"""
+    def __add__(self, other) -> "Operator":
         if isinstance(other, Number):
-            if not np.isclose(other, 0.0):
-                raise ValueError("Constant shift is not implemented for Operator.")
-            return self
-
-        elif isinstance(other, Operator):
-            op_list = self.op_list.copy()
-            opstr1 = tuple(op for op, _ in op_list)
-            for opstr2, interaction in other.op_list:
-                try:
-                    index = opstr1.index(opstr2)
-                    op_list[index][1] += interaction
-                except ValueError:
-                    op_list.append([opstr2, interaction])
-            return Operator(op_list)
-
+            return Operator(self.space, constant=self.constant + other, terms=self._terms)
+        if isinstance(other, Operator):
+            if self.space is not other.space:
+                raise ValueError("Cannot add operators from different ElectronicSpace objects.")
+            terms = dict(self._terms)
+            for term, coeff in other.iter_terms():
+                terms[term] = terms.get(term, 0.0) + coeff
+            return Operator(self.space, constant=self.constant + other.constant, terms=terms)
         return NotImplemented
 
-    def __radd__(self, other: Number) -> Operator:
+    def __radd__(self, other) -> "Operator":
         if isinstance(other, Number):
             return self + other
         return NotImplemented
 
-    def __iadd__(self, other: Operator) -> Operator:
-        return self + other
-
-    def __sub__(self, other: Union[Number, Operator]) -> Operator:
+    def __sub__(self, other) -> "Operator":
         if isinstance(other, Number):
-            if not np.isclose(other, 0.0):
-                raise ValueError("Constant shift is not implemented for Operator.")
-            return self
+            return self + (-other)
         if isinstance(other, Operator):
             return self + (-other)
         return NotImplemented
 
-    def __rsub__(self, other: Number) -> Operator:
+    def __rsub__(self, other) -> "Operator":
         if isinstance(other, Number):
-            if not np.isclose(other, 0.0):
-                raise ValueError("Constant shift is not implemented for Operator.")
-            return -self
+            return (-self) + other
         return NotImplemented
 
-    def __isub__(self, other: Union[Number, Operator]) -> Operator:
-        return self - other
-
-    def __mul__(self, other: Union[Number, Operator]) -> Operator:
-        if isinstance(other, Number):
-            op_list = self.op_list.copy()
-            for opstr, interaction in op_list:
-                for term in interaction:
-                    term[0] *= other
-            return Operator(op_list)
-
-        elif isinstance(other, Operator):
-            op_list = []
-            for opstr1, interaction1 in self.op_list:
-                for opstr2, interaction2 in other.op_list:
-                    op = [opstr1 + opstr2, []]
-                    for J1, *index1 in interaction1:
-                        for J2, *index2 in interaction2:
-                            op[1].append([J1 * J2, *index1, *index2])
-                    op_list.append(op)
-            return Operator(op_list)
-
-        return NotImplemented
-
-    def __rmul__(self, other: Number) -> Operator:
-        if isinstance(other, Number):
-            return self * other
-        return NotImplemented
-
-    def __imul__(self, other: Union[Number, Operator]) -> Operator:
-        if isinstance(other, Number):
-            for opstr, interaction in self.op_list:
-                for term in interaction:
-                    term[0] *= other
-            return self
-
-    def __neg__(self) -> Operator:
+    def __neg__(self) -> "Operator":
         return (-1) * self
 
-    def __truediv__(self, other: Number) -> Operator:
-        if isinstance(other, Number):
-            return self * (1 / other)
-        return NotImplemented
+    def __mul__(self, scalar) -> "Operator":
+        if not isinstance(scalar, Number):
+            return NotImplemented
+        return Operator(
+            self.space,
+            constant=self.constant * scalar,
+            terms={term: coeff * scalar for term, coeff in self.iter_terms()},
+        )
 
-    def __itruediv__(self, other: Number) -> Operator:
-        if isinstance(other, Number):
-            return self.__imul__(1 / other)
-        return NotImplemented
+    def __rmul__(self, scalar) -> "Operator":
+        return self * scalar
+
+    def __truediv__(self, scalar) -> "Operator":
+        if not isinstance(scalar, Number):
+            return NotImplemented
+        return self * (1 / scalar)
+
+    def __matmul__(self, other) -> "Operator":
+        if not isinstance(other, Operator):
+            return NotImplemented
+        if self.space is not other.space:
+            raise ValueError("Cannot multiply operators from different ElectronicSpace objects.")
+
+        result_constant = self.constant * other.constant
+        result_terms: dict[Term, complex] = {}
+
+        if abs(self.constant) > 1e-15:
+            for term, coeff in other.iter_terms():
+                result_terms[term] = result_terms.get(term, 0.0) + self.constant * coeff
+
+        if abs(other.constant) > 1e-15:
+            for term, coeff in self.iter_terms():
+                result_terms[term] = result_terms.get(term, 0.0) + other.constant * coeff
+
+        for left_term, left_coeff in self.iter_terms():
+            for right_term, right_coeff in other.iter_terms():
+                word = left_term.factors + right_term.factors
+                for ordered_factors, ordered_coeff in _normal_order_word(word):
+                    coeff = left_coeff * right_coeff * ordered_coeff
+                    if not ordered_factors:
+                        result_constant += coeff
+                        continue
+                    term = Term(tuple(ordered_factors))
+                    result_terms[term] = result_terms.get(term, 0.0) + coeff
+
+        return Operator(self.space, constant=result_constant, terms=result_terms)
+
+    def __repr__(self) -> str:
+        pieces = []
+        if abs(self.constant) > 1e-15:
+            pieces.append(f"{self.constant:+}")
+        for term, coeff in sorted(self._terms.items(), key=lambda item: (len(item[0].factors), tuple(_sort_key(factor) for factor in item[0].factors))):
+            labels = []
+            for ladder in term.factors:
+                mode = self.space.unpack_mode(ladder.mode)
+                action = "†" if ladder.action == "create" else ""
+                labels.append(f"a{action}[{mode.site},{mode.orbital},{mode.spin}]")
+            pieces.append(f"{coeff:+} {' '.join(labels)}")
+        return " ".join(pieces) if pieces else "0"

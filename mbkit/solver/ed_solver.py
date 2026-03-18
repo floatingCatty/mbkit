@@ -1,38 +1,99 @@
+from __future__ import annotations
+
 import numpy as np
-from ..operator import S_m, S_p, S_z, Operator, annihilate_d, annihilate_u, create_d, create_u, number_d, number_u
-from ._solver import Solver
+from quspin.basis import spinful_fermion_basis_general
+from quspin.operators import hamiltonian as quspin_hamiltonian
+
+from ..operator import Ladder, Operator as SymbolicOperator, Term, models, to_quspin_operator
+from ._frontend import coerce_symbolic_operator
+
+
+def _operator_is_complex(operator: SymbolicOperator, *, atol: float = 1e-12) -> bool:
+    if abs(complex(operator.constant).imag) > atol:
+        return True
+    return any(abs(complex(coeff).imag) > atol for _, coeff in operator.iter_terms())
 
 
 class EDSolver:
-    """Direct exact-diagonalization solver for ``Operator`` objects."""
+    """Direct exact-diagonalization solver for symbolic operators and structured integrals."""
 
     def __init__(self, *, iscomplex: bool = False) -> None:
         self.iscomplex = iscomplex
         self.operator = None
+        self.space = None
         self.nsites = None
         self.n_particles = None
+        self.basis = None
         self.eigenvalues = None
         self.eigenvectors = None
         self.ground_state = None
+        self._dtype = None
 
-    def solve(self, operator: Operator, *, nsites: int, n_particles):
-        if not isinstance(operator, Operator):
-            raise TypeError("EDSolver.solve() expects an mbkit.operator.Operator instance.")
+    def solve(self, hamiltonian, *, nsites: int | None = None, n_particles=None):
+        operator = coerce_symbolic_operator(hamiltonian)
+        inferred_nsites = operator.space.num_spatial_orbitals
+        if nsites is None:
+            nsites = inferred_nsites
+        elif int(nsites) != inferred_nsites:
+            raise ValueError(
+                "EDSolver.solve() received an `nsites` value that does not match "
+                "the Hamiltonian ElectronicSpace."
+            )
 
         self.operator = operator
+        self.space = operator.space
         self.nsites = int(nsites)
         self.n_particles = n_particles
-        self.eigenvalues, self.eigenvectors = operator.diagonalize(
-            nsites=self.nsites,
-            Nparticle=self.n_particles,
-            iscomplex=self.iscomplex,
+        self._dtype = np.complex128 if (self.iscomplex or _operator_is_complex(operator)) else np.float64
+        self.basis = spinful_fermion_basis_general(
+            self.nsites,
+            self.n_particles,
+            simple_symm=False,
+            make_basis=True,
         )
+
+        compilation = to_quspin_operator(operator)
+        if compilation.static_list:
+            quspin_op = quspin_hamiltonian(
+                static_list=compilation.static_list,
+                dynamic_list=[],
+                basis=self.basis,
+                check_symm=False,
+                check_herm=False,
+                check_pcon=False,
+                dtype=self._dtype,
+            )
+            dense = np.asarray(quspin_op.tocsr().toarray(), dtype=self._dtype)
+        else:
+            dense = np.zeros((self.basis.Ns, self.basis.Ns), dtype=self._dtype)
+
+        if dense.shape[0] == 0:
+            raise RuntimeError("EDSolver constructed an empty basis; check the requested particle sector.")
+
+        self.eigenvalues, self.eigenvectors = np.linalg.eigh(dense)
+        self.eigenvalues = np.asarray(self.eigenvalues) + compilation.constant_shift
         self.ground_state = np.asarray(self.eigenvectors)[:, 0]
         return self
 
     def _require_solution(self) -> None:
-        if self.ground_state is None or self.operator is None:
+        if self.ground_state is None or self.operator is None or self.basis is None:
             raise RuntimeError("Call solve() before requesting observables.")
+
+    def _expectation(self, operator: SymbolicOperator):
+        compilation = to_quspin_operator(operator)
+        value = compilation.constant_shift
+        if compilation.static_list:
+            quspin_op = quspin_hamiltonian(
+                static_list=compilation.static_list,
+                dynamic_list=[],
+                basis=self.basis,
+                check_symm=False,
+                check_herm=False,
+                check_pcon=False,
+                dtype=self._dtype,
+            )
+            value += quspin_op.expt_value(np.asarray(self.ground_state))
+        return value
 
     def energy(self):
         self._require_solution()
@@ -40,44 +101,32 @@ class EDSolver:
 
     def rdm1(self):
         self._require_solution()
-        vec = np.asarray(self.ground_state)
-        rdm = np.zeros((self.nsites, 2, self.nsites, 2), dtype=np.complex128 if self.iscomplex else np.float64)
-        for a in range(self.nsites):
-            for s in range(2):
-                for b in range(a, self.nsites):
-                    start = s if a == b else 0
-                    for s_ in range(start, 2):
-                        if s == 0 and s_ == 0:
-                            op = create_u(self.nsites, a) * annihilate_u(self.nsites, b)
-                        elif s == 1 and s_ == 1:
-                            op = create_d(self.nsites, a) * annihilate_d(self.nsites, b)
-                        elif s == 0 and s_ == 1:
-                            op = create_u(self.nsites, a) * annihilate_d(self.nsites, b)
-                        else:
-                            op = create_d(self.nsites, a) * annihilate_u(self.nsites, b)
-
-                        value = op.get_quspin_op(self.nsites, self.n_particles, iscomplex=self.iscomplex).expt_value(vec)
-                        rdm[a, s, b, s_] = value
-                        rdm[b, s_, a, s] = value.conj()
-        return rdm.reshape(2 * self.nsites, 2 * self.nsites)
+        nmode = self.space.num_spin_orbitals
+        rdm = np.zeros((nmode, nmode), dtype=np.complex128)
+        for p in range(nmode):
+            for q in range(nmode):
+                operator = SymbolicOperator(
+                    self.space,
+                    terms={Term((Ladder(p, "create"), Ladder(q, "destroy"))): 1.0},
+                )
+                rdm[p, q] = self._expectation(operator)
+        return np.real_if_close(rdm)
 
     def docc(self):
         self._require_solution()
-        vec = np.asarray(self.ground_state)
-        docc = np.zeros(self.nsites)
-        for i in range(self.nsites):
-            op = number_u(self.nsites, i) * number_d(self.nsites, i)
-            docc[i] = op.get_quspin_op(self.nsites, self.n_particles, iscomplex=self.iscomplex).expt_value(vec).real
-        return docc
+        values = []
+        for site in range(self.space.num_sites):
+            for orbital in self.space.orbitals:
+                operator = (
+                    self.space.number(site, orbital=orbital, spin="up")
+                    @ self.space.number(site, orbital=orbital, spin="down")
+                )
+                values.append(np.real_if_close(self._expectation(operator)).item())
+        return np.asarray(values, dtype=float)
 
     def s2(self):
         self._require_solution()
-        vec = np.asarray(self.ground_state)
-        s_minus = sum(S_m(self.nsites, i) for i in range(self.nsites))
-        s_plus = sum(S_p(self.nsites, i) for i in range(self.nsites))
-        s_z = sum(S_z(self.nsites, i) for i in range(self.nsites))
-        s2 = s_minus * s_plus + s_z * s_z + s_z
-        return s2.get_quspin_op(self.nsites, self.n_particles, iscomplex=self.iscomplex).expt_value(vec)
+        return self._expectation(models.spin_squared(self.space))
 
     def E(self):
         return self.energy()
@@ -88,139 +137,5 @@ class EDSolver:
     def S2(self):
         return self.s2()
 
-class ED_solver(Solver):
-    def __init__(
-            self, 
-            n_int, 
-            n_noint,
-            n_particle: list, 
-            nspin, 
-            kBT: float=0.025,
-            mutol: float=1e-4,
-            decouple_bath: bool=False, 
-            natural_orbital: bool=False, 
-            iscomplex=False
-            ) -> None:
-        super(ED_solver, self).__init__(
-            n_int, 
-            n_noint,
-            sum(n_particle[0]),
-            nspin,
-            decouple_bath, 
-            natural_orbital,
-            iscomplex
-        )
 
-        self.mutol = mutol
-        self.kBT = kBT
-        if self.nspin == 1:
-            assert len(n_particle) == 1 and sum(n_particle[0]) < 2 * self.n_int + self.n_noint, "The spin degenerate case cannot have more electron occupation than the number of orbitals."
-            assert n_particle[0][0] == n_particle[0][1]
-            self.Nparticle = n_particle
-        else:
-            # self.Nparticle = [(self.norb*(self.naux+1)//2,self.norb*(self.naux+1)//2)]
-            for pair in n_particle:
-                assert sum(pair) < 2 * (self.n_int + self.n_noint)
-            self.Nparticle = n_particle
-
-        self._t = 0.
-        self._intparam = {}
-        
-    def solve(self, T, intparam):
-        Hop = self.get_Hop(T=T, intparam=intparam)
-        nsites = self.n_int+self.n_noint
-
-        val, vec = Hop.diagonalize(
-            nsites=nsites, 
-            Nparticle=self.Nparticle,
-            iscomplex=self.iscomplex,
-        )
-
-        self.vec = vec
-        return True
-    
-    def cal_RDM(self, vec):
-        vec = np.asarray(vec)
-        nsites = self.n_int+self.n_noint
-
-        # # compute RDM
-        RDM = np.zeros((nsites, 2, nsites, 2))
-        if self.iscomplex:
-            RDM = RDM + 0j
-        for a in range(nsites):
-            for s in range(2):
-                for b in range(a, nsites):
-                    if a == b:
-                        start = s
-                    else:
-                        start = 0
-
-                    for s_ in range(start,2):
-                        if s == 0 and s_ == 0:
-                            op = create_u(nsites, a) * annihilate_u(nsites, b)
-                        elif s == 1 and s_ == 1:
-                            op = create_d(nsites, a) * annihilate_d(nsites, b)
-                        elif s == 0 and s_ == 1:
-                            op = create_u(nsites, a) * annihilate_d(nsites, b)
-                        else:
-                            op = create_d(nsites, a) * annihilate_u(nsites, b)
-                        
-                        v = op.get_quspin_op(nsites, self.Nparticle).expt_value(vec)
-                        RDM[a, s, b, s_] = v
-                        RDM[b, s_, a, s] = v.conj()
-
-        RDM = RDM.reshape(2*nsites, 2*nsites)
-        
-        if self.decouple_bath:
-            RDM = self.recover_decoupled_bath(RDM)
-
-        if self.natural_orbital:
-            RDM = self.transmat.conj().T @ RDM @ self.transmat
-        return RDM
-    
-    def cal_E(self, vec, intonly=False):
-        Eop = self.get_Eop(intonly=intonly)
-
-        E = Eop.get_quspin_op(self.n_int+self.n_noint, self.Nparticle).expt_value(vec)
-
-        return E
-    
-    def cal_docc(self, vec, intonly=False):
-        vec = np.asarray(vec)
-        nsites = self.n_int+self.n_noint
-
-        if intonly:
-            DOCC = np.zeros(self.n_int)
-            dorb = self.n_int
-        else:
-            DOCC = np.zeros(nsites)
-            dorb = nsites
-        
-        for i in range(dorb):
-            op = number_u(nsites, i) * number_d(nsites, i)
-
-            v = op.get_quspin_op(nsites, self.Nparticle).expt_value(vec)
-            DOCC[i] = v.real
-        
-        return DOCC
-
-    def cal_S2(self, vec, intonly=False):
-        vec = np.asarray(vec)
-        nsites = self.n_int+self.n_noint
-
-        S2 = self.get_S2op(intonly=intonly)
-        v = S2.get_quspin_op(nsites, self.Nparticle).expt_value(vec)
-        
-        return v
-    
-    def E(self, intonly=False):
-        return self.cal_E(self.vec, intonly=intonly)
-
-    def S2(self, intonly=False):
-        return self.cal_S2(self.vec, intonly=intonly)
-    
-    def RDM(self):
-        return self.cal_RDM(self.vec)
-    
-    def docc(self, intonly=False):
-        return self.cal_docc(self.vec, intonly=intonly)
+ED_solver = EDSolver

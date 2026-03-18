@@ -13,6 +13,13 @@ import sys
 sys.modules['hubbard'] = None
 import mbkit
 import mbkit.operator
+import mbkit.operator.integrals
+import mbkit.operator.models
+import mbkit.operator.models.hopping
+import mbkit.operator.models.observables
+import mbkit.operator.models.soc
+import mbkit.operator.transforms.qc
+import mbkit.operator.transforms
 import mbkit.solver
 print('ok')
 """

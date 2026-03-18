@@ -27,7 +27,6 @@ classifiers = [
 [project.optional-dependencies]
 core = ["numpy", "scipy", "quspin"]
 ed = ["numpy", "scipy", "quspin"]
-nqs = ["jax", "jaxlib", "quantax", "equinox", "tqdm", "jaxtyping"]
 dmrg = ["pyblock2"]
 pyscf = ["pyscf"]
 dev = ["pytest>=7"]

@@ -1,13 +1,14 @@
 import numpy as np
 
-from mbkit import EDSolver, Hubbard
+from mbkit import EDSolver, ElectronicSpace, LineLattice, models
 
 
 def test_ed_solver_runs_end_to_end():
-    hamiltonian = Hubbard(neighbors=[[(0, 1)]], nsites=2, U=4.0, t=1.0)
+    space = ElectronicSpace(LineLattice(2, boundary="open"), orbitals=["a"])
+    hamiltonian = models.hubbard(space, t=1.0, U=4.0)
 
     solver = EDSolver()
-    solver.solve(hamiltonian, nsites=2, n_particles=[(1, 1)])
+    solver.solve(hamiltonian, nsites=space.num_spatial_orbitals, n_particles=[(1, 1)])
 
     energy = solver.energy()
     rdm1 = solver.rdm1()

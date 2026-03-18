@@ -9,8 +9,6 @@ __all__ = [
     "ED_solver",
     "DMRGSolver",
     "DMRG_solver",
-    "NQSSolver",
-    "NQS_solver",
     "PySCFSolver",
     "PYSCF_solver",
 ]
@@ -18,8 +16,6 @@ __all__ = [
 _OPTIONAL_EXPORTS = {
     "DMRGSolver": (".dmrg_solver", "DMRGSolver"),
     "DMRG_solver": (".dmrg_solver", "DMRG_solver"),
-    "NQSSolver": (".nqs_solver", "NQSSolver"),
-    "NQS_solver": (".nqs_solver", "NQS_solver"),
     "PySCFSolver": (".pyscf_solver", "PySCFSolver"),
     "PYSCF_solver": (".pyscf_solver", "PYSCF_solver"),
 }
