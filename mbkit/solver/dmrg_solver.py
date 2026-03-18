@@ -2,14 +2,18 @@
 import numpy as np
 try:
     from pyblock2.driver.core import DMRGDriver, SymmetryTypes
-except:
-    print("The block2 is not installed. One should not use DMRG solver.")
+    _PYBLOCK2_IMPORT_ERROR = None
+except ImportError as exc:
+    DMRGDriver = None
+    SymmetryTypes = None
+    _PYBLOCK2_IMPORT_ERROR = exc
 from quspin.operators._make_hamiltonian import _consolidate_static
 import gc
 import numpy as np
 from typing import Dict
-from hubbard.operator import Slater_Kanamori, create_d, annihilate_d, create_u, annihilate_u, number_d, number_u, S_z, S_m, S_p
-from hubbard.solver._solver import Solver
+from ..operator import Slater_Kanamori, create_d, annihilate_d, create_u, annihilate_u, number_d, number_u, S_z, S_m, S_p
+from ._optional import require_dependency
+from ._solver import Solver
 
 class DMRG_solver(Solver):
     def __init__(
@@ -35,6 +39,7 @@ class DMRG_solver(Solver):
             reorder=False,
             eig_cutoff=1e-7
             ) -> None:
+        require_dependency("DMRGSolver", "dmrg", _PYBLOCK2_IMPORT_ERROR)
         super(DMRG_solver, self).__init__(
             n_int,
             n_noint,
@@ -276,7 +281,7 @@ class DMRG_solver(Solver):
 
     def docc(self, intonly=False):
         return self.cal_docc(self.ket, intonly=intonly)
-    
+
     def quspin2block2(self, op_list):
 
         op_map = {
@@ -934,3 +939,6 @@ class DMRG_solver(Solver):
 #     @property
 #     def docc(self):
 #         return self.cal_docc(self.ket)
+
+
+DMRGSolver = DMRG_solver

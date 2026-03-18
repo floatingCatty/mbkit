@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.linalg as la
 import scipy.linalg as sla
-from hubbard.nao.lanczos import tridiagonalize_sqrtm
+from .lanczos import tridiagonalize_sqrtm
 
 # TODO: add nspin dependency, it should be easy, since nspin=1,2 only requires to split the up and down independently, and 
 # nspin = 4 is naturally supported by current code.
@@ -222,8 +222,8 @@ def construct_chain(h_mat_trans, D_trans, bond_trans_mat, n_imp, sfactor=2):
 
 
 if __name__ == "__main__":
-    from hubbard.nao.ghf import generalized_hartree_fock # not useful yet
-    from hubbard.nao.hf import hartree_fock
+    from .ghf import generalized_hartree_fock # not useful yet
+    from .hf import hartree_fock_sk as hartree_fock
     import numpy as np
     import scipy.linalg as sla
 

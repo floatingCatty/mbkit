@@ -1,5 +1,5 @@
 import numpy as np
-from hubbard.operator.common_operators import (
+from ..common_operators import (
     Operator,
     create_u,
     create_d,

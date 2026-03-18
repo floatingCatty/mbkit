@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.linalg as la
-from hubbard.gutz.kinetics import fermi_dirac, find_E_fermi
+from .hf import fermi_dirac, find_E_fermi
 
 def generalized_hartree_fock(
     h_mat,
@@ -295,5 +295,4 @@ def compute_energy(h_mat, F, Delta, D, P):
     E_pair = 0.5 * np.trace(P @ Delta).real
     E_tot = E_one_body + E_two_body + E_pair
     return E_tot
-
 

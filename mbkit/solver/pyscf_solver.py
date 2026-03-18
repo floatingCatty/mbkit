@@ -1,14 +1,17 @@
 try:
     from pyscf import fci, gto, scf, ao2mo, ci, cc, lib, dmrgscf
     from pyscf.scf import diis
-except:
-    print("The pyscf & dmrgscf is not installed. One should not use pyscf solver.")
+    _PYSCF_IMPORT_ERROR = None
+except ImportError as exc:
+    fci = gto = scf = ao2mo = ci = cc = lib = dmrgscf = diis = None
+    _PYSCF_IMPORT_ERROR = exc
 import numpy
 import numpy as np
 from quspin.operators._make_hamiltonian import _consolidate_static
 import copy
 from typing import Dict
-from hubbard.operator import Slater_Kanamori, create_d, annihilate_d, create_u, annihilate_u, number_d, number_u, S_z, S_m, S_p
+from ..operator import Slater_Kanamori, create_d, annihilate_d, create_u, annihilate_u, number_d, number_u, S_z, S_m, S_p
+from ._optional import require_dependency
 import os
 
 class Pyscf_ccsd(object):
@@ -17,6 +20,7 @@ class Pyscf_ccsd(object):
     def __init__(self, ntot, nimp, nbath):
         """Constructor method
         """
+        require_dependency("Pyscf_ccsd", "pyscf", _PYSCF_IMPORT_ERROR)
         self.ntot = ntot
         self.nimp = nimp
         self.nbath = nbath
@@ -154,6 +158,7 @@ class Pyscf_dmrg(Pyscf_ccsd):
     def __init__(self, ntot, nimp, nbath, maxM):
         """Constructor method
         """
+        require_dependency("Pyscf_dmrg", "pyscf", _PYSCF_IMPORT_ERROR)
         self.ntot = ntot
         self.nimp = nimp
         self.nbath = nbath
@@ -261,6 +266,8 @@ class PYSCF_solver(object):
             n_sweep=20, 
             eig_cutoff=1e-7
             ) -> None:
+        
+        require_dependency("PySCFSolver", "pyscf", _PYSCF_IMPORT_ERROR)
         
         self.norb = norb
         self.naux = naux
@@ -542,3 +549,5 @@ class PYSCF_solver(object):
         
         return h1e, h2e
 
+
+PySCFSolver = PYSCF_solver

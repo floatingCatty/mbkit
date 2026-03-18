@@ -1,6 +1,92 @@
 import numpy as np
-from hubbard.operator import create_d, annihilate_d, create_u, annihilate_u, number_d, number_u
-from hubbard.solver._solver import Solver
+from ..operator import S_m, S_p, S_z, Operator, annihilate_d, annihilate_u, create_d, create_u, number_d, number_u
+from ._solver import Solver
+
+
+class EDSolver:
+    """Direct exact-diagonalization solver for ``Operator`` objects."""
+
+    def __init__(self, *, iscomplex: bool = False) -> None:
+        self.iscomplex = iscomplex
+        self.operator = None
+        self.nsites = None
+        self.n_particles = None
+        self.eigenvalues = None
+        self.eigenvectors = None
+        self.ground_state = None
+
+    def solve(self, operator: Operator, *, nsites: int, n_particles):
+        if not isinstance(operator, Operator):
+            raise TypeError("EDSolver.solve() expects an mbkit.operator.Operator instance.")
+
+        self.operator = operator
+        self.nsites = int(nsites)
+        self.n_particles = n_particles
+        self.eigenvalues, self.eigenvectors = operator.diagonalize(
+            nsites=self.nsites,
+            Nparticle=self.n_particles,
+            iscomplex=self.iscomplex,
+        )
+        self.ground_state = np.asarray(self.eigenvectors)[:, 0]
+        return self
+
+    def _require_solution(self) -> None:
+        if self.ground_state is None or self.operator is None:
+            raise RuntimeError("Call solve() before requesting observables.")
+
+    def energy(self):
+        self._require_solution()
+        return np.asarray(self.eigenvalues)[0]
+
+    def rdm1(self):
+        self._require_solution()
+        vec = np.asarray(self.ground_state)
+        rdm = np.zeros((self.nsites, 2, self.nsites, 2), dtype=np.complex128 if self.iscomplex else np.float64)
+        for a in range(self.nsites):
+            for s in range(2):
+                for b in range(a, self.nsites):
+                    start = s if a == b else 0
+                    for s_ in range(start, 2):
+                        if s == 0 and s_ == 0:
+                            op = create_u(self.nsites, a) * annihilate_u(self.nsites, b)
+                        elif s == 1 and s_ == 1:
+                            op = create_d(self.nsites, a) * annihilate_d(self.nsites, b)
+                        elif s == 0 and s_ == 1:
+                            op = create_u(self.nsites, a) * annihilate_d(self.nsites, b)
+                        else:
+                            op = create_d(self.nsites, a) * annihilate_u(self.nsites, b)
+
+                        value = op.get_quspin_op(self.nsites, self.n_particles, iscomplex=self.iscomplex).expt_value(vec)
+                        rdm[a, s, b, s_] = value
+                        rdm[b, s_, a, s] = value.conj()
+        return rdm.reshape(2 * self.nsites, 2 * self.nsites)
+
+    def docc(self):
+        self._require_solution()
+        vec = np.asarray(self.ground_state)
+        docc = np.zeros(self.nsites)
+        for i in range(self.nsites):
+            op = number_u(self.nsites, i) * number_d(self.nsites, i)
+            docc[i] = op.get_quspin_op(self.nsites, self.n_particles, iscomplex=self.iscomplex).expt_value(vec).real
+        return docc
+
+    def s2(self):
+        self._require_solution()
+        vec = np.asarray(self.ground_state)
+        s_minus = sum(S_m(self.nsites, i) for i in range(self.nsites))
+        s_plus = sum(S_p(self.nsites, i) for i in range(self.nsites))
+        s_z = sum(S_z(self.nsites, i) for i in range(self.nsites))
+        s2 = s_minus * s_plus + s_z * s_z + s_z
+        return s2.get_quspin_op(self.nsites, self.n_particles, iscomplex=self.iscomplex).expt_value(vec)
+
+    def E(self):
+        return self.energy()
+
+    def RDM(self):
+        return self.rdm1()
+
+    def S2(self):
+        return self.s2()
 
 class ED_solver(Solver):
     def __init__(

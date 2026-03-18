@@ -2,6 +2,8 @@ import numpy as np
 import copy
 from typing import Dict
 import io
+from time import time
+
 try:
     from quantax.operator import create_u, create_d, annihilate_u, annihilate_d, Operator, number_u, number_d
     import quantax as qtx
@@ -9,14 +11,15 @@ try:
     import jax
     import equinox as eqx
     from tqdm import tqdm
-except:
-    if jax.process_index() == 0:
-        print("The quantax & jax & equinox is not installed. One should not use NQS solver.")
-from hubbard.nao.hf import hartree_fock_qc, compute_random_energy_qc
-from time import time
-from .cluster import Cluster
-from .graph_net import GTran
-from hubbard.solver._solver import Solver
+    _NQS_IMPORT_ERROR = None
+except ImportError as exc:
+    create_u = create_d = annihilate_u = annihilate_d = Operator = number_u = number_d = None
+    qtx = jnp = jax = eqx = tqdm = None
+    _NQS_IMPORT_ERROR = exc
+
+from ..nao.hf import hartree_fock_qc, compute_random_energy_qc
+from ._optional import require_dependency
+from ._solver import Solver
 
 class NQS_solver(Solver):
     def __init__(
@@ -48,6 +51,10 @@ class NQS_solver(Solver):
             debug_neural: bool=False,
             debug_every: int=1,
             ) -> None:
+        require_dependency("NQSSolver", "nqs", _NQS_IMPORT_ERROR)
+        from .cluster import Cluster
+        from .graph_net import GTran
+
         super(NQS_solver, self).__init__(
             n_int, 
             n_noint,
@@ -1188,3 +1195,5 @@ class NQS_solver(Solver):
 #             else:
 #                 raise RuntimeError("The solver have not solve any model!")
             
+
+NQSSolver = NQS_solver

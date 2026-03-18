@@ -1,10 +1,10 @@
 import numpy as np
 import copy
 from typing import Dict
-from hubbard.nao.hf import hartree_fock_sk
-from hubbard.nao.tonao import nao_two_chain
-from hubbard.operator import Slater_Kanamori, S_z, S_m, S_p, Operator
-from hubbard.operator.extended_hubbard.extended_hubbard import multi_orbital_extended_hubbard
+from ..nao.hf import hartree_fock_sk
+from ..nao.tonao import nao_two_chain
+from ..operator import Slater_Kanamori, S_z, S_m, S_p, Operator
+from ..operator.extended_hubbard.extended_hubbard import multi_orbital_extended_hubbard
 
 # base class of all solvers
 class Solver(object):
@@ -72,7 +72,7 @@ class Solver(object):
     def to_natrual_orbital(self, T: np.array, intparams: Dict[str, float]):
         assert (self.n_noint / self.n_int) - (self.n_noint // self.n_int) < 1e-7, "The non-interacting orbital must be integer number of times of that of the interacting orbitals."
 
-        F,  D, _ = hartree_fock(
+        F,  D, _ = hartree_fock_sk(
             h_mat=T,
             n_imp=self.n_int,
             n_bath=self.n_noint,
