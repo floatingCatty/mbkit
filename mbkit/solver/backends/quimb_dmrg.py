@@ -321,3 +321,16 @@ class QuimbDMRGBackend(SolverBackend):
     def s2(self):
         self._require_solution()
         return self._expectation(self.space.spin_squared_term())
+
+    def diagnostics(self) -> dict[str, object]:
+        data = super().diagnostics()
+        data.update(
+            {
+                "solve_mode": self.solve_mode,
+                "has_mpo": self.mpo is not None,
+                "has_state": self.state is not None,
+                "max_bond_dim": self.bond_dims[-1] if isinstance(self.bond_dims, (list, tuple)) and self.bond_dims else self.bond_dims,
+                "max_sweeps": self.max_sweeps,
+            }
+        )
+        return data

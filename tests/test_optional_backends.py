@@ -1,6 +1,6 @@
 import pytest
 
-from mbkit import EDSolver
+from mbkit import EDSolver, FCISolver, MP2Solver, UHFSolver
 from mbkit import solver as solver_pkg
 from mbkit.solver.dmrg_solver import _PYBLOCK2_IMPORT_ERROR
 from mbkit.solver.pyscf_solver import _PYSCF_IMPORT_ERROR
@@ -22,6 +22,15 @@ def test_dmrg_backend_has_clear_optional_dependency_error():
 def test_pyscf_backend_has_clear_optional_dependency_error():
     if _PYSCF_IMPORT_ERROR is None:
         assert solver_pkg.PySCFSolver is not None
+        assert solver_pkg.FCISolver is FCISolver
+        assert solver_pkg.UHFSolver is UHFSolver
+        assert solver_pkg.MP2Solver is MP2Solver
     else:
         with pytest.raises(ImportError, match=r"mbkit\[pyscf\]"):
             solver_pkg.PySCFSolver()
+        with pytest.raises(ImportError, match=r"mbkit\[pyscf\]"):
+            solver_pkg.FCISolver()
+        with pytest.raises(ImportError, match=r"mbkit\[pyscf\]"):
+            solver_pkg.UHFSolver()
+        with pytest.raises(ImportError, match=r"mbkit\[pyscf\]"):
+            solver_pkg.MP2Solver()

@@ -16,7 +16,6 @@ def _operator_is_complex(operator: SymbolicOperator, *, atol: float = 1e-12) -> 
         return True
     return any(abs(complex(coeff).imag) > atol for _, coeff in operator.iter_terms())
 
-
 class QuSpinEDBackend(SolverBackend):
     """Concrete exact-diagonalization backend implemented with QuSpin."""
 
@@ -24,7 +23,7 @@ class QuSpinEDBackend(SolverBackend):
     backend_name = "quspin"
     capabilities = BackendCapabilities(
         supports_ground_state=True,
-        supports_excited_states=True,
+        supports_excited_states=False,
         supports_rdm1=True,
         supports_native_expectation=True,
         supports_complex=True,
@@ -38,9 +37,12 @@ class QuSpinEDBackend(SolverBackend):
         self.nsites = None
         self.n_particles = None
         self.basis = None
+        self.quspin_operator = None
         self.eigenvalues = None
         self.eigenvectors = None
         self.ground_state = None
+        self.solve_mode = None
+        self.constant_shift = None
         self._dtype = None
 
     def solve(self, hamiltonian, *, nsites: int | None = None, n_particles=None):
@@ -70,8 +72,15 @@ class QuSpinEDBackend(SolverBackend):
         )
 
         compilation = compile_quspin_hamiltonian(operator)
+        self.constant_shift = compilation.constant_shift
+        self.quspin_operator = None
+        self.solve_mode = None
+
+        if self.basis.Ns == 0:
+            raise RuntimeError("EDSolver constructed an empty basis; check the requested particle sector.")
+
         if compilation.static_list:
-            quspin_op = quspin_hamiltonian(
+            self.quspin_operator = quspin_hamiltonian(
                 static_list=compilation.static_list,
                 dynamic_list=[],
                 basis=self.basis,
@@ -80,16 +89,27 @@ class QuSpinEDBackend(SolverBackend):
                 check_pcon=False,
                 dtype=self._dtype,
             )
-            dense = np.asarray(quspin_op.tocsr().toarray(), dtype=self._dtype)
-        else:
-            dense = np.zeros((self.basis.Ns, self.basis.Ns), dtype=self._dtype)
+            if self.basis.Ns == 1:
+                self.eigenvalues = np.asarray([self.quspin_operator.eigh()[0][0] + self.constant_shift])
+                self.eigenvectors = np.asarray([[1.0]], dtype=self._dtype)
+                self.ground_state = np.asarray(self.eigenvectors)[:, 0]
+                self.solve_mode = "quspin_eigh_small"
+                return self
 
-        if dense.shape[0] == 0:
-            raise RuntimeError("EDSolver constructed an empty basis; check the requested particle sector.")
+            eigenvalues, eigenvectors = self.quspin_operator.eigsh(k=1, which="SA")
+            order = np.argsort(np.real(np.asarray(eigenvalues)))
+            self.eigenvalues = np.asarray(eigenvalues)[order] + self.constant_shift
+            self.eigenvectors = np.asarray(eigenvectors)[:, order]
+            self.ground_state = np.asarray(self.eigenvectors)[:, 0]
+            self.solve_mode = "quspin_eigsh"
+            return self
 
-        self.eigenvalues, self.eigenvectors = np.linalg.eigh(dense)
-        self.eigenvalues = np.asarray(self.eigenvalues) + compilation.constant_shift
+        # Pure constant Hamiltonians have no operator terms to pass to QuSpin.
+        # The exact spectrum is still trivial within the requested basis.
+        self.eigenvalues = np.full(self.basis.Ns, self.constant_shift, dtype=self._dtype)
+        self.eigenvectors = np.eye(self.basis.Ns, dtype=self._dtype)
         self.ground_state = np.asarray(self.eigenvectors)[:, 0]
+        self.solve_mode = "analytic_constant"
         return self
 
     def _require_solution(self) -> None:
@@ -145,6 +165,19 @@ class QuSpinEDBackend(SolverBackend):
         self._require_solution()
         return self._expectation(self.space.spin_squared_term())
 
+    def diagnostics(self) -> dict[str, object]:
+        data = super().diagnostics()
+        data.update(
+            {
+                "basis_size": None if self.basis is None else int(self.basis.Ns),
+                "solve_mode": self.solve_mode,
+                "n_particles": self.n_particles,
+                "dtype": None if self._dtype is None else np.dtype(self._dtype).name,
+                "constant_shift": self.constant_shift,
+            }
+        )
+        return data
+
     def E(self):
         return self.energy()
 
@@ -153,4 +186,3 @@ class QuSpinEDBackend(SolverBackend):
 
     def S2(self):
         return self.s2()
-

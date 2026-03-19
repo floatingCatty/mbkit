@@ -19,7 +19,12 @@ class BackendCapabilities:
     supports_excited_states: bool = False
     supports_time_evolution: bool = False
     supports_rdm1: bool = False
+    supports_rdm2: bool = False
+    supports_correlation: bool = False
+    supports_entanglement: bool = False
+    supports_greens_function: bool = False
+    supports_statistics: bool = False
+    supports_diagnostics: bool = True
     supports_native_expectation: bool = False
     supports_complex: bool = True
     preferred_problem_type: str = "symbolic"
-

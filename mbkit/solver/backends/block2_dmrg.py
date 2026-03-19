@@ -18,7 +18,6 @@ from ..base import SolverBackend
 from ..capabilities import BackendCapabilities
 from ..compile import compile_qc_hamiltonian
 
-
 def _real_scalar(value, *, name: str, atol: float = 1e-10) -> float:
     scalar = complex(value)
     if abs(scalar.imag) > atol:
@@ -195,3 +194,18 @@ class Block2DMRGBackend(SolverBackend):
         self._require_solution()
         return self._expectation(self.space.spin_squared_term())
 
+    def diagnostics(self) -> dict[str, object]:
+        data = super().diagnostics()
+        data.update(
+            {
+                "n_spin_orbitals": None if self.space is None else self.space.num_spin_orbitals,
+                "n_electrons": self.n_electrons,
+                "bond_dim": self.bond_dim,
+                "bond_mul": self.bond_mul,
+                "n_sweep": self.n_sweep,
+                "reorder": self.reorder,
+                "has_driver": self.driver is not None,
+                "has_mpo": self.mpo is not None,
+            }
+        )
+        return data

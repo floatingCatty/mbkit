@@ -515,3 +515,16 @@ class TeNPyDMRGBackend(SolverBackend):
     def s2(self):
         self._require_solution()
         return self._expectation(self.space.spin_squared_term())
+
+    def diagnostics(self) -> dict[str, object]:
+        data = super().diagnostics()
+        data.update(
+            {
+                "mpo_mode": self.mpo_mode,
+                "has_mpo": self.mpo is not None,
+                "has_psi": self.psi is not None,
+                "chi_max": self.chi_max,
+                "max_sweeps": self.max_sweeps,
+            }
+        )
+        return data

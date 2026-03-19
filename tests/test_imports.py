@@ -30,6 +30,7 @@ import mbkit.utils.dependencies
 import mbkit.utils.selection
 import mbkit.utils.solver
 from mbkit import chain, cubic, general, honeycomb, kagome, ladder, rectangular, square, triangular
+from mbkit import FCISolver, UHFSolver, MP2Solver
 print('ok')
 """
     env = os.environ.copy()

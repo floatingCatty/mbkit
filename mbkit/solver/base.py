@@ -2,16 +2,94 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from .capabilities import BackendCapabilities
 from .registry import available_solver_backends, get_backend_spec, get_solver_backend_class
+from ..utils.solver import coerce_symbolic_operator
 
 
 class SolverBackend:
-    """Metadata-only base class for concrete solver backends."""
+    """Shared base class for concrete solver backends.
+
+    Design choice:
+    the public runtime object in `mbkit` remains the solver itself, not a
+    separate task or result wrapper. To keep that solver-centric API flexible,
+    backends can expose lightweight generic property hooks such as `expect()`
+    and `diagnostics()` in addition to shorthand methods like `energy()` or
+    `rdm1()`.
+    """
 
     solver_family = ""
     backend_name = ""
     capabilities = BackendCapabilities()
+
+    @property
+    def native(self):
+        """Return the backend-native runtime object.
+
+        For the current direct backends this is the backend instance itself.
+        More specialized backends can override this if they want to surface a
+        wrapped engine object instead.
+        """
+        return self
+
+    def expect(self, operator, *, stats: bool = False):
+        """Evaluate the expectation value of a symbolic operator.
+
+        Deterministic backends return a scalar by default. Passing
+        `stats=True` returns a small dictionary-shaped statistics payload that
+        future stochastic backends can enrich with uncertainties.
+        """
+        if not hasattr(self, "_expectation"):
+            raise NotImplementedError(
+                f"{type(self).__name__} does not expose generic operator expectation values."
+            )
+        require_solution = getattr(self, "_require_solution", None)
+        if callable(require_solution):
+            require_solution()
+        value = getattr(self, "_expectation")(coerce_symbolic_operator(operator))
+        if not stats:
+            return value
+        return {
+            "mean": value,
+            "stderr": 0.0,
+            "variance": 0.0,
+            "n_samples": None,
+            "kind": "deterministic",
+            "backend": self.backend_name,
+        }
+
+    def expect_value(self, operator):
+        """Return the scalar expectation value of a symbolic operator."""
+        return self.expect(operator, stats=False)
+
+    def diagnostics(self) -> dict[str, object]:
+        """Return structured backend diagnostics for the last run."""
+        return {
+            "backend": self.backend_name,
+            "family": self.solver_family,
+            "preferred_problem_type": self.capabilities.preferred_problem_type,
+            "capabilities": asdict(self.capabilities),
+        }
+
+    def available_properties(self) -> tuple[str, ...]:
+        """List the property helpers exposed by this backend."""
+        properties: list[str] = ["energy", "diagnostics", "available_properties"]
+        if hasattr(self, "_expectation"):
+            properties.extend(["expect", "expect_value"])
+        for name in (
+            "rdm1",
+            "rdm2",
+            "docc",
+            "s2",
+            "correlation",
+            "entanglement_entropy",
+            "greens_function",
+        ):
+            if callable(getattr(self, name, None)):
+                properties.append(name)
+        return tuple(dict.fromkeys(properties))
 
 
 class SolverFacade:
@@ -33,6 +111,11 @@ class SolverFacade:
     def backend(self):
         """Return the concrete backend instance."""
         return self._backend
+
+    @property
+    def native(self):
+        """Return the backend-native runtime object."""
+        return getattr(self._backend, "native", self._backend)
 
     @property
     def backend_name(self) -> str:
@@ -62,6 +145,22 @@ class SolverFacade:
         self._backend.solve(*args, **kwargs)
         return self
 
+    def expect(self, operator, *, stats: bool = False):
+        """Evaluate a generic operator expectation directly from the solver."""
+        return self._backend.expect(operator, stats=stats)
+
+    def expect_value(self, operator):
+        """Return the scalar expectation value of a symbolic operator."""
+        return self._backend.expect_value(operator)
+
+    def diagnostics(self):
+        """Return structured backend diagnostics for the current solve."""
+        return self._backend.diagnostics()
+
+    def available_properties(self):
+        """Return the property helpers supported by the selected backend."""
+        return self._backend.available_properties()
+
     def __getattr__(self, name):
         return getattr(self._backend, name)
 
@@ -70,4 +169,3 @@ class SolverFacade:
             f"{type(self).__name__}(backend={self.backend_name!r}, "
             f"family={self.solver_family!r})"
         )
-

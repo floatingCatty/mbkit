@@ -1,4 +1,4 @@
-"""Public PySCF solver façade."""
+"""Compatibility umbrella for package-based PySCF solver selection."""
 
 from __future__ import annotations
 
@@ -8,7 +8,11 @@ from .backends.pyscf_reference import PySCFReferenceProblem, _build_pyscf_refere
 
 
 class PySCFSolver(SolverFacade):
-    """PySCF solver façade.
+    """Compatibility PySCF solver façade.
+
+    New code should prefer the method-based public facades such as
+    `FCISolver`, `UHFSolver`, and `MP2Solver`. This class remains available as
+    a package-level umbrella for compatibility and explicit backend access.
 
     Method routing:
     - `method="fci"` uses the exact sector backend on the general spin-conserving path

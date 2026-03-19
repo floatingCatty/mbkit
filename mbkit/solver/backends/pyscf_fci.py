@@ -361,6 +361,18 @@ class PySCFFCIBackend(SolverBackend):
         self._require_solution()
         return self.energy_value
 
+    def _expectation(self, operator):
+        self._require_solution()
+        compiled = _compile_sector_fci_problem(
+            operator,
+            n_particles=self.problem.nelec,
+            atol=self.atol,
+        )
+        return _real_if_close_scalar(
+            _expectation_compiled(self.problem, self.ground_state, compiled),
+            atol=self.atol,
+        )
+
     def rdm1(self):
         self._require_solution()
         nmode = self.problem.num_spin_orbitals
@@ -416,3 +428,15 @@ class PySCFFCIBackend(SolverBackend):
             ),
             atol=self.atol,
         )
+
+    def diagnostics(self) -> dict[str, object]:
+        data = super().diagnostics()
+        data.update(
+            {
+                "method": self.method,
+                "sector": None if self.problem is None else self.problem.nelec,
+                "basis_dimension": None if self.problem is None else len(self.problem.basis_states),
+                "matrix_dimension": None if self.hamiltonian_matrix is None else int(self.hamiltonian_matrix.shape[0]),
+            }
+        )
+        return data

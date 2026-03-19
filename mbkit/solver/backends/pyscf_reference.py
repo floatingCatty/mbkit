@@ -202,11 +202,23 @@ def _build_uhf_reference(problem: PySCFReferenceProblem, *, conv_tol: float, max
     return mf
 
 
+def _reference_rdm1(reference) -> tuple[np.ndarray, np.ndarray]:
+    dm1a, dm1b = reference.make_rdm1()
+    return np.asarray(dm1a), np.asarray(dm1b)
+
+
+def _reference_spin_square(reference) -> float:
+    value = reference.spin_square()
+    if isinstance(value, tuple):
+        return float(value[0])
+    return float(value)
+
+
 class PySCFReferenceBackend(SolverBackend):
     """PySCF backend for UHF-based approximate many-body methods.
 
-    The stable public API routes `PySCFSolver(method="uhf")` and
-    `PySCFSolver(method="mp2")` through this backend.
+    The stable public API routes `UHFSolver`, `MP2Solver`, and the
+    compatibility `PySCFSolver(method=...)` entrypoints through this backend.
     """
 
     solver_family = "qc"
@@ -249,6 +261,11 @@ class PySCFReferenceBackend(SolverBackend):
             conv_tol=self.conv_tol,
             max_cycle=self.max_cycle,
         )
+        if not bool(getattr(self.reference, "converged", False)):
+            raise RuntimeError(
+                "PySCF reference solver did not converge the UHF reference state. "
+                "Increase `max_cycle`, relax `conv_tol`, or choose a different method."
+            )
 
         if self.method == "uhf":
             self.post_hf = None
@@ -269,32 +286,80 @@ class PySCFReferenceBackend(SolverBackend):
         self._require_solution()
         return self.energy_value
 
-    def rdm1(self):
+    def rdm1(self, *, kind: str | None = None):
         self._require_solution()
         if self.post_hf is None:
-            dm1a, dm1b = self.reference.make_rdm1()
+            if kind not in (None, "reference"):
+                raise ValueError(
+                    "UHFSolver.rdm1() supports only `kind='reference'`."
+                )
+            dm1a, dm1b = _reference_rdm1(self.reference)
         else:
-            dm1 = self.post_hf.make_rdm1()
-            if isinstance(dm1, tuple):
-                dm1a, dm1b = dm1
+            if kind is None:
+                raise ValueError(
+                    "MP2Solver.rdm1() requires an explicit kind. "
+                    "Use `kind='unrelaxed'` for the PySCF MP2 density or "
+                    "`kind='reference'` for the underlying UHF density."
+                )
+            if kind == "reference":
+                dm1a, dm1b = _reference_rdm1(self.reference)
+            elif kind == "unrelaxed":
+                dm1 = self.post_hf.make_rdm1(ao_repr=True)
+                if isinstance(dm1, tuple):
+                    dm1a, dm1b = dm1
+                else:
+                    dm1a, dm1b = dm1[0], dm1[1]
             else:
-                dm1a, dm1b = dm1[0], dm1[1]
+                raise ValueError(
+                    "MP2Solver.rdm1() supports `kind='unrelaxed'` or `kind='reference'`."
+                )
         return _interleaved_rdm1_from_spin_blocks(self.problem.space, np.asarray(dm1a), np.asarray(dm1b))
 
     def docc(self):
         self._require_solution()
+        if self.post_hf is not None:
+            raise NotImplementedError(
+                "MP2Solver.docc() is not implemented because double occupancy is a two-body "
+                "observable and cannot be reconstructed from the current MP2 one-body density."
+            )
         rdm1 = np.asarray(self.rdm1())
         return np.asarray(
             [rdm1[2 * orbital, 2 * orbital] * rdm1[2 * orbital + 1, 2 * orbital + 1] for orbital in range(self.problem.norb)],
             dtype=float,
         )
 
-    def s2(self):
+    def s2(self, *, kind: str | None = None):
         self._require_solution()
-        target = self.post_hf if self.post_hf is not None else self.reference
-        if hasattr(target, "spin_square"):
-            value = target.spin_square()
-            if isinstance(value, tuple):
-                return float(value[0])
-            return float(value)
-        return float(self.reference.spin_square()[0])
+        if self.post_hf is None:
+            if kind not in (None, "reference"):
+                raise ValueError("UHFSolver.s2() supports only `kind='reference'`.")
+            return _reference_spin_square(self.reference)
+        if kind is None:
+            raise ValueError(
+                "MP2Solver.s2() requires `kind='reference'` because the current backend only "
+                "exposes the underlying UHF reference <S^2>, not a correlated MP2 spin observable."
+            )
+        if kind != "reference":
+            raise ValueError("MP2Solver.s2() supports only `kind='reference'`.")
+        return _reference_spin_square(self.reference)
+
+    def available_properties(self) -> tuple[str, ...]:
+        props = list(super().available_properties())
+        if self.method == "mp2" and "docc" in props:
+            props.remove("docc")
+        return tuple(props)
+
+    def diagnostics(self) -> dict[str, object]:
+        data = super().diagnostics()
+        data.update(
+            {
+                "method": self.method,
+                "norb": None if self.problem is None else self.problem.norb,
+                "nelec": None if self.problem is None else self.problem.nelec,
+                "reference_converged": None if self.reference is None else bool(getattr(self.reference, "converged", False)),
+                "post_hf_converged": None if self.post_hf is None else bool(getattr(self.post_hf, "converged", True)),
+                "rdm1_kinds": ("reference",) if self.post_hf is None else ("reference", "unrelaxed"),
+                "s2_kinds": ("reference",),
+            }
+        )
+        return data

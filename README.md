@@ -60,4 +60,4 @@ space = ElectronicSpace(SquareLattice(2, 2), orbitals=["a"])
 hamiltonian = space.extended_hubbard(hopping=1.0, onsite_U=4.0, intersite_V={"horizontal": 1.0})
 ```
 
-`mbkit` exposes direct `EDSolver`, `DMRGSolver`, and `PySCFSolver` implementations on the new operator frontend. Optional OpenFermion and Qiskit Nature bridges live under `mbkit.operator.interop`.
+`mbkit` exposes method-based solvers such as `EDSolver`, `DMRGSolver`, `FCISolver`, `UHFSolver`, and `MP2Solver` on the new operator frontend. `PySCFSolver` remains available as a compatibility umbrella for explicit package-level routing. Optional OpenFermion and Qiskit Nature bridges live under `mbkit.operator.interop`.
