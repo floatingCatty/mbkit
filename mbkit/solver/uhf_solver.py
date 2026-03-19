@@ -10,6 +10,11 @@ class UHFSolver(SolverFacade):
 
     The current implementation routes to the PySCF UHF-compatible reference
     backend.
+
+    The shared runtime surface comes from `SolverFacade`, so users interact
+    with this solver the same way as the other public facades: call
+    `solve(...)`, inspect `available_properties()`, then query supported
+    helpers and observables.
     """
 
     solver_family = "qc"

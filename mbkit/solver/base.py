@@ -18,6 +18,14 @@ class SolverBackend:
     backends can expose lightweight generic property hooks such as `expect()`
     and `diagnostics()` in addition to shorthand methods like `energy()` or
     `rdm1()`.
+
+    Developer contract:
+    subclasses implement the actual numerical work while this base class
+    supplies the common helper surface exposed through `SolverFacade`.
+    Backend authors should implement `solve()` plus whichever property helpers
+    they support. Implement `_expectation()` to opt into the generic
+    `expect()` / `expect_value()` API, and `_require_solution()` to provide a
+    consistent "call solve() first" guard across all observables.
     """
 
     solver_family = ""
@@ -40,6 +48,11 @@ class SolverBackend:
         Deterministic backends return a scalar by default. Passing
         `stats=True` returns a small dictionary-shaped statistics payload that
         future stochastic backends can enrich with uncertainties.
+
+        Backends opt into this generic helper by implementing
+        `_expectation(operator)`. If `_require_solution()` exists, it is called
+        before the operator is evaluated so this method follows the same
+        lifecycle contract as backend-specific helpers such as `energy()`.
         """
         if not hasattr(self, "_expectation"):
             raise NotImplementedError(
@@ -65,7 +78,11 @@ class SolverBackend:
         return self.expect(operator, stats=False)
 
     def diagnostics(self) -> dict[str, object]:
-        """Return structured backend diagnostics for the last run."""
+        """Return structured backend diagnostics for the last run.
+
+        Backends can extend this dictionary with method-specific fields while
+        preserving these common keys for tooling and debugging.
+        """
         return {
             "backend": self.backend_name,
             "family": self.solver_family,
@@ -74,7 +91,11 @@ class SolverBackend:
         }
 
     def available_properties(self) -> tuple[str, ...]:
-        """List the property helpers exposed by this backend."""
+        """List the property helpers exposed by this backend.
+
+        The returned names describe the stable runtime surface that users can
+        call on the public solver façade after `solve()`.
+        """
         properties: list[str] = ["energy", "diagnostics", "available_properties"]
         if hasattr(self, "_expectation"):
             properties.extend(["expect", "expect_value"])
@@ -97,6 +118,18 @@ class SolverFacade:
 
     The façade keeps the user-facing solver names stable while allowing the
     implementation underneath to be swapped or expanded later.
+
+    User model:
+    instantiate a public solver class such as `EDSolver` or `FCISolver`, call
+    `solve(...)`, then use the shared helper methods defined here
+    (`expect()`, `expect_value()`, `diagnostics()`,
+    `available_properties()`) together with any backend-specific observable
+    helpers delegated via `__getattr__`.
+
+    Developer model:
+    concrete public solver classes usually only set `solver_family` and a
+    default backend. They inherit the common runtime API from this class so the
+    user-facing surface stays aligned across solver families.
     """
 
     solver_family = ""
@@ -129,7 +162,11 @@ class SolverFacade:
 
     @classmethod
     def available_backends(cls):
-        """Return the available backend names for this solver family."""
+        """Return the available backend names for this solver family.
+
+        These are the strings accepted by the façade constructor's `backend=`
+        argument.
+        """
         return available_solver_backends(cls.solver_family)
 
     def unwrap_backend(self):
@@ -141,12 +178,21 @@ class SolverFacade:
         return self._backend
 
     def solve(self, *args, **kwargs):
-        """Delegate `solve()` and return the façade for fluent usage."""
+        """Delegate `solve()` and return the façade for fluent usage.
+
+        This keeps the public runtime object stable: `solver.solve(...)`
+        returns the same façade instance that exposes shared helpers and any
+        backend-specific observable methods.
+        """
         self._backend.solve(*args, **kwargs)
         return self
 
     def expect(self, operator, *, stats: bool = False):
-        """Evaluate a generic operator expectation directly from the solver."""
+        """Evaluate a generic operator expectation directly from the solver.
+
+        This is the façade-level entrypoint for backends that implement the
+        generic expectation contract.
+        """
         return self._backend.expect(operator, stats=stats)
 
     def expect_value(self, operator):
@@ -154,11 +200,19 @@ class SolverFacade:
         return self._backend.expect_value(operator)
 
     def diagnostics(self):
-        """Return structured backend diagnostics for the current solve."""
+        """Return structured backend diagnostics for the current solve.
+
+        The common keys come from `SolverBackend.diagnostics()`, and backends
+        may add method- or engine-specific fields.
+        """
         return self._backend.diagnostics()
 
     def available_properties(self):
-        """Return the property helpers supported by the selected backend."""
+        """Return the property helpers supported by the selected backend.
+
+        This is useful when code wants to discover whether helpers such as
+        `expect()`, `rdm1()`, or `docc()` are available before calling them.
+        """
         return self._backend.available_properties()
 
     def __getattr__(self, name):

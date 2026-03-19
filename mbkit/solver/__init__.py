@@ -1,4 +1,14 @@
-"""Public solver exports for `mbkit`."""
+"""Public solver exports for `mbkit`.
+
+All exported solver classes are public façades built on `SolverFacade`, so
+they share the same basic runtime workflow:
+
+1. instantiate a solver class,
+2. call `solve(...)`,
+3. query shared helpers such as `expect()`, `expect_value()`,
+   `diagnostics()`, and `available_properties()`, plus any solver-specific
+   observable methods exposed by the selected backend.
+"""
 
 from .dmrg_solver import DMRGSolver, DMRG_solver
 from .ed_solver import EDSolver, ED_solver

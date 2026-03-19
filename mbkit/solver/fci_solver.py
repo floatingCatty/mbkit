@@ -11,6 +11,11 @@ class FCISolver(SolverFacade):
     The current implementation routes to the PySCF exact-sector backend. The
     public API is intentionally method-based so future FCI backends can be
     added without changing user code.
+
+    This class inherits the shared `SolverFacade` runtime helpers, so the
+    normal workflow is `solve(...)` followed by common helpers such as
+    `expect()`, `expect_value()`, `diagnostics()`, and
+    `available_properties()`.
     """
 
     solver_family = "qc"

@@ -14,6 +14,11 @@ class PySCFSolver(SolverFacade):
     `FCISolver`, `UHFSolver`, and `MP2Solver`. This class remains available as
     a package-level umbrella for compatibility and explicit backend access.
 
+    Runtime usage is still the shared `SolverFacade` pattern: instantiate the
+    solver, call `solve(...)`, then use inherited helpers such as
+    `diagnostics()` and `available_properties()` to inspect what the selected
+    backend exposes.
+
     Method routing:
     - `method="fci"` uses the exact sector backend on the general spin-conserving path
     - `method="uhf"` and `method="mp2"` use the UHF-based reference backend on the

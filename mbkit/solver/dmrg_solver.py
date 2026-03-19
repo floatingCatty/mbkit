@@ -11,6 +11,11 @@ class DMRGSolver(SolverFacade):
 
     The default backend is the block2 implementation registered under the
     `dmrg` solver family.
+
+    Like the other public solver façades, this class inherits the shared
+    runtime helpers from `SolverFacade`. After `solve(...)`, users can rely on
+    `available_properties()` and `diagnostics()` for discovery, and call
+    helpers such as `expect()` when the selected backend advertises support.
     """
 
     solver_family = "dmrg"
