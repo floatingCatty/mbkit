@@ -6,16 +6,19 @@ def test_solver_registry_exposes_registered_backend_families():
 
     assert backends["ed"] == ("quspin",)
     assert backends["dmrg"] == ("block2", "quimb", "tenpy")
-    assert backends["qc"] == ("pyscf_fci", "pyscf_reference")
+    assert backends["nqs"] == ("quantax",)
+    assert backends["qc"] == ("pyscf_reference",)
 
 
 def test_solver_registry_resolves_default_backend_specs():
     assert get_backend_spec("ed").name == "quspin"
     assert get_backend_spec("dmrg").name == "block2"
-    assert get_backend_spec("qc").name == "pyscf_fci"
+    assert get_backend_spec("nqs").name == "quantax"
+    assert get_backend_spec("qc").name == "pyscf_reference"
     assert get_solver_backend_class("ed").__name__ == "QuSpinEDBackend"
     assert get_solver_backend_class("dmrg", "quimb").__name__ == "QuimbDMRGBackend"
     assert get_solver_backend_class("dmrg", "tenpy").__name__ == "TeNPyDMRGBackend"
+    assert get_solver_backend_class("nqs").__name__ == "QuantaxNQSBackend"
     assert get_solver_backend_class("qc", "pyscf_reference").__name__ == "PySCFReferenceBackend"
 
 

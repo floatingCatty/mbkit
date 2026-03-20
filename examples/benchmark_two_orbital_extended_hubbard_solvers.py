@@ -85,7 +85,8 @@ SOLVER_SPECS = {
     },
     "pyscf": {
         "family": "qc",
-        "label": "PySCF FCI",
+        "label": "PySCF UHF",
+        "constructor_kwargs": {"method": "uhf"},
         "solve_kwargs": {"n_particles": (2, 2)},
     },
 }

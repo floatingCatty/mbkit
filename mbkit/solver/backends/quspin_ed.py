@@ -16,6 +16,32 @@ def _operator_is_complex(operator: SymbolicOperator, *, atol: float = 1e-12) -> 
         return True
     return any(abs(complex(coeff).imag) > atol for _, coeff in operator.iter_terms())
 
+
+def _normalize_quspin_particle_sectors(*, space, n_electrons=None, n_particles=None):
+    if n_electrons is not None and n_particles is not None:
+        raise ValueError("Provide only one of `n_electrons` or `n_particles`.")
+
+    if isinstance(n_particles, list) and len(n_particles) > 1:
+        if not all(isinstance(pair, tuple) and len(pair) == 2 for pair in n_particles):
+            raise TypeError(
+                "Multi-sector ED particle selections must be provided as a list of `(n_up, n_down)` tuples."
+            )
+        return [(int(pair[0]), int(pair[1])) for pair in n_particles]
+
+    if n_electrons is not None or n_particles is not None:
+        pair, _ = normalize_electron_count(
+            space=space,
+            n_electrons=n_electrons,
+            n_particles=n_particles,
+        )
+        return [pair]
+
+    if space.electron_count() is not None:
+        pair, _ = normalize_electron_count(space=space)
+        return [pair]
+
+    return None
+
 class QuSpinEDBackend(SolverBackend):
     """Concrete exact-diagonalization backend implemented with QuSpin."""
 
@@ -45,7 +71,7 @@ class QuSpinEDBackend(SolverBackend):
         self.constant_shift = None
         self._dtype = None
 
-    def solve(self, hamiltonian, *, nsites: int | None = None, n_particles=None):
+    def solve(self, hamiltonian, *, nsites: int | None = None, n_electrons=None, n_particles=None):
         operator = coerce_symbolic_operator(hamiltonian)
         inferred_nsites = operator.space.num_spatial_orbitals
         if nsites is None:
@@ -59,10 +85,11 @@ class QuSpinEDBackend(SolverBackend):
         self.operator = operator
         self.space = operator.space
         self.nsites = int(nsites)
-        if n_particles is None and operator.space.electron_count() is not None:
-            pair, _ = normalize_electron_count(space=operator.space)
-            n_particles = [pair]
-        self.n_particles = n_particles
+        self.n_particles = _normalize_quspin_particle_sectors(
+            space=operator.space,
+            n_electrons=n_electrons,
+            n_particles=n_particles,
+        )
         self._dtype = np.complex128 if (self.iscomplex or _operator_is_complex(operator)) else np.float64
         self.basis = spinful_fermion_basis_general(
             self.nsites,

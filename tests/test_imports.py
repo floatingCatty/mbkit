@@ -23,6 +23,7 @@ import mbkit.solver.base
 import mbkit.solver.capabilities
 import mbkit.solver.compile
 import mbkit.solver.compile.local_terms
+import mbkit.solver.nqs_solver
 import mbkit.solver.registry
 import mbkit.utils
 import mbkit.utils.construction
@@ -30,7 +31,7 @@ import mbkit.utils.dependencies
 import mbkit.utils.selection
 import mbkit.utils.solver
 from mbkit import chain, cubic, general, honeycomb, kagome, ladder, rectangular, square, triangular
-from mbkit import FCISolver, UHFSolver, MP2Solver
+from mbkit import UHFSolver, MP2Solver, CCSDSolver, CCSDTSolver, NQSSolver
 print('ok')
 """
     env = os.environ.copy()

@@ -1,16 +1,16 @@
 """Concrete solver backend implementations."""
 
 from .block2_dmrg import Block2DMRGBackend
-from .pyscf_fci import PySCFFCIBackend
 from .pyscf_reference import PySCFReferenceBackend
-from .tenpy_dmrg import TeNPyDMRGBackend
+from .quantax_nqs import QuantaxNQSBackend
 from .quimb_dmrg import QuimbDMRGBackend
 from .quspin_ed import QuSpinEDBackend
+from .tenpy_dmrg import TeNPyDMRGBackend
 
 __all__ = [
     "Block2DMRGBackend",
-    "PySCFFCIBackend",
     "PySCFReferenceBackend",
+    "QuantaxNQSBackend",
     "QuimbDMRGBackend",
     "QuSpinEDBackend",
     "TeNPyDMRGBackend",

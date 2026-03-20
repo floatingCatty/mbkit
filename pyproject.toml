@@ -33,6 +33,7 @@ tenpy = ["tenpy"]
 tensor = ["quimb", "tenpy"]
 interop = ["openfermion", "qiskit-nature"]
 pyscf = ["pyscf"]
+nqs = ["equinox", "quantax", "quspin"]
 dev = ["pytest>=7"]
 
 [tool.setuptools]

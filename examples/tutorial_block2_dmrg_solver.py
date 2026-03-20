@@ -5,7 +5,7 @@ This example mirrors the public ED workflow but uses the stable block2-backed
 
 1. define an `ElectronicSpace`,
 2. construct the Hamiltonian explicitly from operator terms,
-3. solve a fixed-particle problem with `DMRGSolver`,
+3. solve a fixed-particle problem with `DMRGSolver` in spin-adapted `SU2` mode,
 4. compute observables through the shared solver façade helpers.
 """
 
@@ -55,6 +55,8 @@ def main() -> None:
     print()
 
     solver = DMRGSolver(
+        symmetry="sgf",
+        target_spin=0,
         bond_dim=64,
         bond_mul=2,
         n_sweep=10,
@@ -62,7 +64,7 @@ def main() -> None:
         eig_cutoff=1e-8,
         iprint=0,
         scratch_dir="/tmp/mbkit_block2_tutorial",
-    ).solve(hamiltonian, n_particles=(2, 2))
+    ).solve(hamiltonian, n_electrons=2)
 
     print("Available solver properties:", solver.available_properties())
     print()

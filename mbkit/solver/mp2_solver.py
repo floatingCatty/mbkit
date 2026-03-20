@@ -9,7 +9,8 @@ class MP2Solver(SolverFacade):
     """Method-based MP2 solver facade.
 
     The current implementation routes to the PySCF UMP2-capable reference
-    backend.
+    backend. MP2 is non-variational, so its total energy is not guaranteed to
+    stay above exact diagonalization values on strongly correlated problems.
 
     As with the other public solver facades, users call `solve(...)` first and
     then rely on the inherited helper surface from `SolverFacade`. For MP2 in

@@ -120,7 +120,7 @@ class SolverFacade:
     implementation underneath to be swapped or expanded later.
 
     User model:
-    instantiate a public solver class such as `EDSolver` or `FCISolver`, call
+    instantiate a public solver class such as `EDSolver` or `UHFSolver`, call
     `solve(...)`, then use the shared helper methods defined here
     (`expect()`, `expect_value()`, `diagnostics()`,
     `available_properties()`) together with any backend-specific observable

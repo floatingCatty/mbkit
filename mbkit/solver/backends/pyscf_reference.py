@@ -5,11 +5,11 @@ from dataclasses import dataclass
 import numpy as np
 
 try:
-    from pyscf import ao2mo, gto, mp, scf
+    from pyscf import ao2mo, cc, gto, mp, scf
 
     _PYSCF_IMPORT_ERROR = None
 except ImportError as exc:
-    ao2mo = gto = mp = scf = None
+    ao2mo = cc = gto = mp = scf = None
     _PYSCF_IMPORT_ERROR = exc
 
 from ...operator.transforms import UnsupportedTransformError
@@ -23,9 +23,10 @@ from ..capabilities import BackendCapabilities
 class PySCFReferenceProblem:
     """Mean-field-compatible PySCF problem extracted from a symbolic Hamiltonian.
 
-    This backend intentionally supports a narrower class than the exact FCI path:
-    the two-body interaction must be representable by one spin-independent
-    spatial-orbital ERI tensor suitable for UHF/UMP2-style methods.
+    This backend intentionally supports a narrower class than the general
+    symbolic Hamiltonian path used by `EDSolver`: the two-body interaction must
+    be representable by one spin-independent spatial-orbital ERI tensor
+    suitable for UHF/MP2/CC-style methods.
     """
 
     space: object
@@ -61,6 +62,54 @@ def _spatial_index(mode) -> int:
 def _mode_spatial(space, mode_index: int) -> int:
     mode = space.unpack_mode(mode_index)
     return mode.site * space.num_orbitals_per_site + mode.orbital_index
+
+
+_SUPPORTED_REFERENCE_METHODS = ("uhf", "mp2", "ccsd", "ccsd(t)")
+_METHOD_ALIASES = {"ccsd_t": "ccsd(t)"}
+_METHOD_SOLVER_LABELS = {
+    "uhf": "UHFSolver",
+    "mp2": "MP2Solver",
+    "ccsd": "CCSDSolver",
+    "ccsd(t)": "CCSDTSolver",
+}
+_METHOD_DISPLAY_NAMES = {
+    "uhf": "UHF",
+    "mp2": "MP2",
+    "ccsd": "CCSD",
+    "ccsd(t)": "CCSD(T)",
+}
+
+
+def normalize_reference_method(method: str) -> str:
+    normalized = str(method).strip().lower()
+    return _METHOD_ALIASES.get(normalized, normalized)
+
+
+def _solver_label_for_method(method: str) -> str:
+    return _METHOD_SOLVER_LABELS.get(method, "PySCFSolver")
+
+
+def _display_name_for_method(method: str) -> str:
+    return _METHOD_DISPLAY_NAMES.get(method, method.upper())
+
+
+def _supported_reference_method_error(context: str) -> str:
+    supported = ", ".join(f"method={name!r}" for name in _SUPPORTED_REFERENCE_METHODS)
+    return f"{context} supports only {supported}."
+
+
+def _extract_spin_block_rdm1(dm1) -> tuple[np.ndarray, np.ndarray]:
+    if isinstance(dm1, tuple):
+        dm1a, dm1b = dm1
+    else:
+        dm1a, dm1b = dm1[0], dm1[1]
+    return np.asarray(dm1a), np.asarray(dm1b)
+
+
+def _rdm1_kinds_for_method(method: str) -> tuple[str, ...]:
+    if method in {"mp2", "ccsd"}:
+        return ("reference", "unrelaxed")
+    return ("reference",)
 
 
 def _build_pyscf_reference_problem(hamiltonian, *, n_electrons=None, n_particles=None, atol: float = 1e-10):
@@ -217,7 +266,8 @@ def _reference_spin_square(reference) -> float:
 class PySCFReferenceBackend(SolverBackend):
     """PySCF backend for UHF-based approximate many-body methods.
 
-    The stable public API routes `UHFSolver`, `MP2Solver`, and the
+    The stable public API routes `UHFSolver`, `MP2Solver`, `CCSDSolver`,
+    `CCSDTSolver`, and the
     compatibility `PySCFSolver(method=...)` entrypoints through this backend.
     """
 
@@ -233,7 +283,7 @@ class PySCFReferenceBackend(SolverBackend):
 
     def __init__(self, *args, **kwargs) -> None:
         require_dependency("PySCFSolver", "pyscf", _PYSCF_IMPORT_ERROR)
-        self.method = kwargs.pop("method", "uhf")
+        self.method = normalize_reference_method(kwargs.pop("method", "uhf"))
         self.conv_tol = kwargs.pop("conv_tol", 1e-10)
         self.max_cycle = kwargs.pop("max_cycle", 50)
         self.atol = kwargs.pop("atol", 1e-10)
@@ -243,12 +293,21 @@ class PySCFReferenceBackend(SolverBackend):
         self.reference = None
         self.post_hf = None
         self.energy_value = None
+        self.correlation_energy = None
+        self.triples_correction = None
 
     def solve(self, hamiltonian, *, n_electrons=None, n_particles=None):
-        if self.method not in {"uhf", "mp2"}:
+        if self.method not in _SUPPORTED_REFERENCE_METHODS:
             raise NotImplementedError(
-                "PySCF reference backend currently supports only method='uhf' or method='mp2'."
+                _supported_reference_method_error("PySCF reference backend currently")
             )
+
+        self.problem = None
+        self.reference = None
+        self.post_hf = None
+        self.energy_value = None
+        self.correlation_energy = None
+        self.triples_correction = None
 
         self.problem = _build_pyscf_reference_problem(
             hamiltonian,
@@ -272,10 +331,37 @@ class PySCFReferenceBackend(SolverBackend):
             self.energy_value = float(self.reference.e_tot + self.problem.ecore)
             return self
 
-        self.post_hf = mp.UMP2(self.reference)
+        if self.method == "mp2":
+            self.post_hf = mp.UMP2(self.reference)
+            self.post_hf.verbose = 0
+            corr_energy, _ = self.post_hf.kernel()
+            self.correlation_energy = _real_scalar(corr_energy, name="MP2 correlation energy", atol=self.atol)
+            self.energy_value = float(self.reference.e_tot + self.correlation_energy + self.problem.ecore)
+            return self
+
+        self.post_hf = cc.UCCSD(self.reference)
         self.post_hf.verbose = 0
-        corr_energy, _ = self.post_hf.kernel()
-        self.energy_value = float(self.reference.e_tot + corr_energy + self.problem.ecore)
+        corr_energy = self.post_hf.kernel()[0]
+        if not bool(getattr(self.post_hf, "converged", False)):
+            raise RuntimeError(
+                f"PySCF reference solver did not converge the {_display_name_for_method(self.method)} amplitudes. "
+                "Increase `max_cycle`, relax `conv_tol`, or choose a different method."
+            )
+
+        self.correlation_energy = _real_scalar(
+            corr_energy,
+            name=f"{_display_name_for_method(self.method)} correlation energy",
+            atol=self.atol,
+        )
+        if self.method == "ccsd(t)":
+            triples = self.post_hf.ccsd_t()
+            self.triples_correction = _real_scalar(
+                triples,
+                name="CCSD(T) triples correction",
+                atol=self.atol,
+            )
+        total_correction = self.correlation_energy + (0.0 if self.triples_correction is None else self.triples_correction)
+        self.energy_value = float(self.reference.e_tot + total_correction + self.problem.ecore)
         return self
 
     def _require_solution(self) -> None:
@@ -294,33 +380,38 @@ class PySCFReferenceBackend(SolverBackend):
                     "UHFSolver.rdm1() supports only `kind='reference'`."
                 )
             dm1a, dm1b = _reference_rdm1(self.reference)
-        else:
+        elif self.method in {"mp2", "ccsd"}:
             if kind is None:
                 raise ValueError(
-                    "MP2Solver.rdm1() requires an explicit kind. "
-                    "Use `kind='unrelaxed'` for the PySCF MP2 density or "
+                    f"{_solver_label_for_method(self.method)}.rdm1() requires an explicit kind. "
+                    f"Use `kind='unrelaxed'` for the PySCF {_display_name_for_method(self.method)} density or "
                     "`kind='reference'` for the underlying UHF density."
                 )
             if kind == "reference":
                 dm1a, dm1b = _reference_rdm1(self.reference)
             elif kind == "unrelaxed":
-                dm1 = self.post_hf.make_rdm1(ao_repr=True)
-                if isinstance(dm1, tuple):
-                    dm1a, dm1b = dm1
-                else:
-                    dm1a, dm1b = dm1[0], dm1[1]
+                dm1a, dm1b = _extract_spin_block_rdm1(self.post_hf.make_rdm1(ao_repr=True))
             else:
                 raise ValueError(
-                    "MP2Solver.rdm1() supports `kind='unrelaxed'` or `kind='reference'`."
+                    f"{_solver_label_for_method(self.method)}.rdm1() supports `kind='unrelaxed'` or `kind='reference'`."
                 )
+        else:
+            if kind is None:
+                raise ValueError(
+                    "CCSDTSolver.rdm1() requires `kind='reference'` because the current backend "
+                    "does not expose a triples-corrected one-body density."
+                )
+            if kind != "reference":
+                raise ValueError("CCSDTSolver.rdm1() supports only `kind='reference'`.")
+            dm1a, dm1b = _reference_rdm1(self.reference)
         return _interleaved_rdm1_from_spin_blocks(self.problem.space, np.asarray(dm1a), np.asarray(dm1b))
 
     def docc(self):
         self._require_solution()
         if self.post_hf is not None:
             raise NotImplementedError(
-                "MP2Solver.docc() is not implemented because double occupancy is a two-body "
-                "observable and cannot be reconstructed from the current MP2 one-body density."
+                f"{_solver_label_for_method(self.method)}.docc() is not implemented because double occupancy is a "
+                "two-body observable and the current backend does not expose a method-consistent post-HF helper for it."
             )
         rdm1 = np.asarray(self.rdm1())
         return np.asarray(
@@ -336,20 +427,25 @@ class PySCFReferenceBackend(SolverBackend):
             return _reference_spin_square(self.reference)
         if kind is None:
             raise ValueError(
-                "MP2Solver.s2() requires `kind='reference'` because the current backend only "
-                "exposes the underlying UHF reference <S^2>, not a correlated MP2 spin observable."
+                f"{_solver_label_for_method(self.method)}.s2() requires `kind='reference'` because the current backend "
+                f"only exposes the underlying UHF reference <S^2>, not a correlated {_display_name_for_method(self.method)} "
+                "spin observable."
             )
         if kind != "reference":
-            raise ValueError("MP2Solver.s2() supports only `kind='reference'`.")
+            raise ValueError(f"{_solver_label_for_method(self.method)}.s2() supports only `kind='reference'`.")
         return _reference_spin_square(self.reference)
 
     def available_properties(self) -> tuple[str, ...]:
         props = list(super().available_properties())
-        if self.method == "mp2" and "docc" in props:
+        if self.method != "uhf" and "docc" in props:
             props.remove("docc")
         return tuple(props)
 
     def diagnostics(self) -> dict[str, object]:
+        lambda_converged = None
+        if self.post_hf is not None and getattr(self.post_hf, "l1", None) is not None:
+            lambda_converged = bool(getattr(self.post_hf, "converged_lambda", False))
+
         data = super().diagnostics()
         data.update(
             {
@@ -358,7 +454,10 @@ class PySCFReferenceBackend(SolverBackend):
                 "nelec": None if self.problem is None else self.problem.nelec,
                 "reference_converged": None if self.reference is None else bool(getattr(self.reference, "converged", False)),
                 "post_hf_converged": None if self.post_hf is None else bool(getattr(self.post_hf, "converged", True)),
-                "rdm1_kinds": ("reference",) if self.post_hf is None else ("reference", "unrelaxed"),
+                "post_hf_lambda_converged": lambda_converged,
+                "correlation_energy": self.correlation_energy,
+                "triples_correction": self.triples_correction,
+                "rdm1_kinds": _rdm1_kinds_for_method(self.method),
                 "s2_kinds": ("reference",),
             }
         )

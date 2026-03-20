@@ -22,3 +22,13 @@ def test_ed_solver_runs_end_to_end():
     assert np.all(docc >= -1e-10)
     assert np.all(docc <= 1.0 + 1e-10)
     assert np.isfinite(np.real(s2))
+
+
+def test_ed_solver_accepts_integer_n_electrons_and_normalizes_to_particle_sector():
+    space = ElectronicSpace(LineLattice(2, boundary="open"), orbitals=["a"])
+    hamiltonian = space.hubbard(t=1.0, U=4.0)
+
+    solver = EDSolver().solve(hamiltonian, n_electrons=2)
+
+    assert solver.n_particles == [(1, 1)]
+    assert np.isfinite(np.real(solver.energy()))

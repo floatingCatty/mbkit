@@ -62,21 +62,23 @@ _REGISTRY: dict[str, dict[str, BackendSpec]] = {
         ),
     },
     "qc": {
-        "pyscf_fci": BackendSpec(
-            family="qc",
-            name="pyscf_fci",
-            module=".backends.pyscf_fci",
-            attribute="PySCFFCIBackend",
-            description="PySCF backend for exact sector FCI on general spin-conserving Hamiltonians.",
-            default=True,
-        ),
         "pyscf_reference": BackendSpec(
             family="qc",
             name="pyscf_reference",
             module=".backends.pyscf_reference",
             attribute="PySCFReferenceBackend",
             description="PySCF backend for UHF-based approximate methods on UHF-compatible Hamiltonians.",
-            default=False,
+            default=True,
+        ),
+    },
+    "nqs": {
+        "quantax": BackendSpec(
+            family="nqs",
+            name="quantax",
+            module=".backends.quantax_nqs",
+            attribute="QuantaxNQSBackend",
+            description="Neural quantum state backend built on Quantax.",
+            default=True,
         ),
     },
 }
