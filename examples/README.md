@@ -22,6 +22,27 @@ Run it from the source tree with:
 python examples/tutorial_ed_solver.py
 ```
 
+### `tutorial_quantax_nqs_solver.py`
+
+Quantax NQS tutorial covering:
+
+- building a two-site one-orbital hopping dimer explicitly from operator terms
+- solving the fixed `(n_up, n_down) = (1, 1)` sector with `NQSSolver`
+- comparing the NQS energy against a lightweight `EDSolver` reference on the same Hamiltonian
+- computing energies, one-body densities, double occupancies, and `<S^2>`
+- using the generic `expect()`, `expect_value()`, `available_properties()`, and `diagnostics()` helpers
+- noting that `n_particles=(1, 1)` is intentional because an integer electron count selects the full total-particle sector in `NQSSolver`
+
+This tutorial requires the optional NQS dependency set. Quantax depends on
+JAX, so install the appropriate JAX build for your platform and accelerator if
+needed. The exact-sampling workflow in this example also requires QuSpin,
+which is included in `.[nqs]`.
+
+```bash
+pip install -e ".[nqs]"
+python examples/tutorial_quantax_nqs_solver.py
+```
+
 ### `tutorial_block2_dmrg_solver.py`
 
 block2 / pyblock2 DMRG tutorial covering:

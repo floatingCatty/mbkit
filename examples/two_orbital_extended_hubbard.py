@@ -116,7 +116,7 @@ def build_reference_two_orbital_extended_hubbard(nx: int = 2, ny: int = 2):
 
 
 def main() -> None:
-    space, hamiltonian = build_reference_two_orbital_extended_hubbard(nx=2, ny=2)
+    space, hamiltonian = build_reference_two_orbital_extended_hubbard(nx=12, ny=1)
 
     print("Space:", space)
     print("Available shells:", space.available_shells())
@@ -128,13 +128,15 @@ def main() -> None:
     from mbkit.solver import EDSolver
 
     solver = EDSolver()
-    solver.solve(hamiltonian, n_particles=[(0,4),(1,3),(2,2),(3,1),(4,0)])
+    print(space.num_sites // 2, "electrons")
+    solver.solve(hamiltonian, n_electrons=space.num_sites // 2)
     # print(solver.rdm1())
     import matplotlib.pyplot as plt
 
     rdm = solver.rdm1()
-    rdm = rdm.reshape(4,2,2,4,2,2)
-    rdm = rdm.transpose(1,0,2,4,3,5).reshape(16,16)
+    nsites = space.num_sites
+    rdm = rdm.reshape(nsites,2,2,nsites,2,2)
+    rdm = rdm.transpose(1,0,2,4,3,5).reshape(nsites*4,-1)
 
     plt.matshow(rdm, cmap="bwr", vmin=-1, vmax=1)
     plt.savefig("two_orbital_extended_hubbard_rdm1.png", dpi=300)
